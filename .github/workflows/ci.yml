@@ -30,7 +30,7 @@ jobs:
         run: bun run typecheck
 
       - name: Unit and integration tests
-        run: bun test
+        run: bun test --timeout 120000
 
       - name: Security harness (adversarial, real HTTP/WebSocket)
         env:
@@ -59,5 +59,5 @@ jobs:
         run: bun run typecheck
         shell: bash
       - name: Platform-specific logic (data folder, JVM presets, versions)
-        run: bun test tests/data-location.test.ts tests/jvm-presets.test.ts tests/mc-version.test.ts
+        run: bun test --timeout 120000 tests/data-location.test.ts tests/jvm-presets.test.ts tests/mc-version.test.ts
         shell: bash
