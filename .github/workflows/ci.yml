@@ -30,7 +30,21 @@ jobs:
         run: bun run typecheck
 
       - name: Unit and integration tests
-        run: bun test --timeout 120000
+        shell: bash
+        run: |
+          set +e
+          bun test --timeout 120000 2>&1 | tee /tmp/test.log
+          status=${PIPESTATUS[0]}
+          echo "bun test exited with $status"
+          if [ "$status" -ne 0 ]; then
+            grep -E "^\(fail\)|^error:|Unhandled error" /tmp/test.log | head -40
+            # Name the file that broke, so the failure is readable from the run page
+            # (and from the check-run annotations) instead of only inside the log.
+            for f in $(ls tests/*.test.ts | sort); do
+              bun test --timeout 120000 "$f" > /tmp/one.log 2>&1 || echo "::error title=Failing test file::$f"
+            done
+          fi
+          exit "$status"
 
       - name: Security harness (adversarial, real HTTP/WebSocket)
         env:
