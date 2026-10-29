@@ -24,6 +24,7 @@ import {
 } from "./relay-client";
 import { playerJoinName, playerLeaveName } from "./console-detect";
 import { heapMbFor, initialHeapMbFor } from "../minecraft/jvm-presets";
+import { explainCrash } from "./crash-cause";
 
 const CONSOLE_LIMIT = 6000;
 // Live usage on the dashboard/overview: one sample per second.
@@ -729,18 +730,33 @@ function handleExit(serverId: number, exitCode: number | null, signalCode: strin
     return;
   }
 
-  // Unexpected exit → crashed.
+  // Unexpected exit → crashed. Name the cause when the console makes it obvious, instead of leaving
+  // a bare exit code that sends the operator looking in the wrong place.
   setStatus(serverId, "crashed");
-  entry.state.lastError = `Process exited unexpectedly with code ${exitCode ?? "unknown"}`;
+  const cause = explainCrash({
+    lines: entry.state.console.slice(-250),
+    exitCode: exitCode ?? null,
+    signalCode: signalCode == null ? null : String(signalCode),
+    memoryMb: server?.memory_mb,
+  });
+  entry.state.lastError = cause.message;
   systemLine(serverId, `Server process exited unexpectedly (code ${exitCode ?? "signal " + signalCode}).`);
+  systemLine(serverId, cause.message);
+  if (server && cause.kind === "out_of_memory") {
+    systemLine(
+      serverId,
+      `Current allocation: ${server.memory_mb} MB (heap ${heapMbFor(server.memory_mb)} MB). ` +
+        "Edit the server's memory on the Settings page; a vanilla 1.21 server needs at least 1024 MB to start.",
+    );
+  }
   recordActivity({
     type: "server.crashed", serverId, target: server?.name ?? `#${serverId}`, result: "failure",
-    metadata: { exitCode, signal: signalCode },
+    metadata: { exitCode, signal: signalCode, cause: cause.kind },
   });
   if (server) {
     notify({
       title: `${server.name} crashed`,
-      body: `The server process exited with code ${exitCode ?? "unknown"}. Open the console for details.`,
+      body: cause.message,
       severity: "error", kind: "server_crash", link: `/servers/${serverId}/console`,
       dedupeKey: `crash:${serverId}`,
     });
