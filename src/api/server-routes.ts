@@ -12,7 +12,8 @@ import {
 import { readProperties, writeProperties, PROPERTY_SPECS } from "../minecraft/properties";
 import { applyPlayerAction, listPlayers, playerSessions, resolvePlayerRef, syncPlayerFiles, whitelistEnabled, setWhitelistEnabled } from "../minecraft/players";
 import { readPlayerData, applyPlayerDataOp } from "../minecraft/player-data";
-import { listWorlds, createEmptyWorld, deleteWorld, renameWorld, rediscoverWorlds } from "../minecraft/worlds";
+import { listWorlds, createEmptyWorld, deleteWorld, renameWorld, rediscoverWorlds, detectWorlds } from "../minecraft/worlds";
+import { CHUNKBASE_DIMENSIONS, CHUNKBASE_PLATFORMS, chunkbasePlatformFor, platformIsExact, seedMapUrl } from "../minecraft/chunkbase";
 import { SOFTWARE_CATALOG, listVersions, resolveBuild } from "../minecraft/providers";
 import { LOADER_MAP, listInstalled, installVersion, removePlugin, searchProjects, getProject, getVersions, checkUpdates } from "../plugins/modrinth";
 import { installRecommendedPlugins, recommendsPlugins, RECOMMENDED_PLUGINS } from "../plugins/recommended";
@@ -821,6 +822,56 @@ export function registerServerRoutes(api: Router): void {
   });
 
   /* ---------------- Map ---------------- */
+
+  /**
+   * The seed map: the real seed of this server's worlds, plus the exact Chunkbase deep links.
+   *
+   * The seed is read from `level.dat`, so the map that opens is the map of the world that is actually
+   * on disk. Nothing here fetches Chunkbase — the panel only builds a URL, which keeps the page working
+   * offline and means no third-party request leaves the host until the operator clicks.
+   */
+  api.get("/api/servers/:id/seed-map", async (ctx) => {
+    const id = requireServer(ctx);
+    const server = queryOne<{ uuid: string; mc_version: string; software: string; name: string }>(
+      "SELECT uuid, mc_version, software, name FROM servers WHERE id = ?", [id],
+    )!;
+    const directory = serverDir(server.uuid);
+    const detected = detectWorlds(directory);
+    const properties = readProperties(directory);
+    const mainWorld = properties.values["level-name"] || "world";
+    const platform = chunkbasePlatformFor(server.mc_version);
+
+    const worlds = detected.map((world) => ({
+      folder: world.folder,
+      name: world.name,
+      seed: world.seed ?? null,
+      lastUpdated: world.lastUpdated ?? null,
+      dimensions: world.dimensions ?? { nether: false, end: false },
+      isMain: world.folder === mainWorld,
+      links: world.seed
+        ? {
+            overworld: seedMapUrl({ seed: world.seed, platform, dimension: "overworld" }),
+            nether: seedMapUrl({ seed: world.seed, platform, dimension: "nether" }),
+            end: seedMapUrl({ seed: world.seed, platform, dimension: "end" }),
+          }
+        : null,
+    }));
+    const primary = worlds.find((world) => world.isMain) ?? worlds[0] ?? null;
+
+    return json({
+      server: { id, name: server.name, software: server.software, mcVersion: server.mc_version },
+      platform,
+      platformIsExact: platformIsExact(server.mc_version, platform),
+      dimensions: CHUNKBASE_DIMENSIONS,
+      knownPlatforms: CHUNKBASE_PLATFORMS,
+      /** Honest capability report: the site forbids framing, so the panel opens a tab instead. */
+      embeddable: false,
+      embedBlockedBy: "www.chunkbase.com sends X-Frame-Options: DENY",
+      primaryWorld: primary,
+      worlds,
+      levelName: mainWorld,
+    });
+  });
 
   api.get("/api/servers/:id/map", async (ctx) => {
     const id = requireServer(ctx);

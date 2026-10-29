@@ -6,7 +6,7 @@ import { gunzipSync, inflateSync } from "node:zlib";
  * metadata such as the world seed without pulling in a dependency.
  */
 export type NbtValue =
-  | { type: "byte" | "short" | "int" | "long" | "float" | "double"; value: number }
+  | { type: "byte" | "short" | "int" | "long" | "float" | "double"; value: number; exact?: string }
   | { type: "string"; value: string }
   | { type: "byteArray" | "intArray" | "longArray"; value: ArrayLike<number> }
   | { type: "list"; items: NbtValue[] }
@@ -37,7 +37,12 @@ function readPayload(reader: Reader, type: number): NbtValue {
     case 1: return { type: "byte", value: reader.byte() };
     case 2: return { type: "short", value: reader.short() };
     case 3: return { type: "int", value: reader.int() };
-    case 4: return { type: "long", value: Number(reader.long()) };
+    case 4: {
+      // A 64-bit seed does not survive Number(); keep the exact digits alongside it so a
+      // seed like -4172144997902289642 is not silently rounded into a different world.
+      const big = reader.long();
+      return { type: "long", value: Number(big), exact: big.toString() };
+    }
     case 5: return { type: "float", value: reader.float() };
     case 6: return { type: "double", value: reader.double() };
     case 7: {
@@ -106,6 +111,13 @@ export function getPath(root: Record<string, NbtValue> | null, path: string[]): 
   return current ?? null;
 }
 
+/** Exact text of a numeric tag — 64-bit seeds must not be rounded through Number(). */
+function readExact(value: NbtValue | null): string | null {
+  if (!value || !("value" in value)) return null;
+  if ("exact" in value && typeof value.exact === "string") return value.exact;
+  return typeof value.value === "number" ? String(value.value) : null;
+}
+
 /** Reads the world seed from level.dat, supporting both legacy and modern layouts. */
 export function readWorldSeed(levelDatPath: string): { seed: string | null; lastPlayed: number | null; version: string | null } {
   const root = parseNbt(levelDatPath);
@@ -114,9 +126,10 @@ export function readWorldSeed(levelDatPath: string): { seed: string | null; last
   const dataCompound = data?.type === "compound" ? data.value : root;
 
   const candidates = [
-    ["WorldGenSettings", "seed"],
+    ["WorldGenSettings", "seed"], // 1.16+
     ["seed"],
-    ["Level", "RandomSeed"],
+    ["RandomSeed"], // flat Data.RandomSeed written by some servers/tools
+    ["Level", "RandomSeed"], // pre-1.13
   ];
   let seed: string | null = null;
   for (const path of candidates) {
@@ -125,10 +138,8 @@ export function readWorldSeed(levelDatPath: string): { seed: string | null; last
       if (!current || current.type !== "compound") { current = undefined; break; }
       current = current.value[segment];
     }
-    if (current && "value" in current && typeof current.value === "number") {
-      seed = String(current.value);
-      break;
-    }
+    const exact = readExact(current ?? null);
+    if (exact !== null) { seed = exact; break; }
   }
   const lastPlayed = getPath(root, ["Data", "LastPlayed"]);
   const version = getPath(root, ["Data", "Version", "Name"]);

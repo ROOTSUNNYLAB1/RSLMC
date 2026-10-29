@@ -250,7 +250,7 @@ Everything below is an actual page in the panel — no feature is a mock button.
 </tr>
 </table>
 
-Deeper walkthroughs: [updating](docs/updating.md) · [the sidebar map and permissions](#panel-features) ·
+Deeper walkthroughs: [updating](docs/updating.md) · [the seed map](docs/seed-map.md) · [the sidebar map and permissions](#panel-features) ·
 [honest limitations](#known-limitations-stated-not-hidden).
 
 ### Environment
@@ -715,12 +715,25 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
   restore and automatic retention pruning.
 * **Schedules** — cron (5-field, validated through `/api/cron/validate`), persisted in SQLite,
   next-run calculation, run-now and per-run history; missed runs are not replayed.
-* **Map** — BlueMap installation for Paper/Purpur/Folia, real render status read from
-  `bluemap/web/maps`, and a built-in viewer: `/servers/:id/map/view` embeds the renderer's own
-  output, which the panel serves through `/api/servers/:id/map/web/*` with an authenticated,
-  directory-bounded path check (traversal attempts are rejected, unauthenticated requests get 401).
-  When there is no renderer the page shows a setup screen and explains why a seed cannot draw a
-  real map.
+* **Map** — the page is a **Chunkbase seed map** first: the panel reads the real seed out of
+  `level.dat` (`GET /api/servers/:id/seed-map`), maps your Minecraft version onto the matching
+  Chunkbase profile (`java_1_21_4`, `java_26_3`, …), and builds the exact deep link —
+  `#seed=…&platform=…&dimension=overworld|nether|end&x=…&z=…&zoom=…` — for every world on disk.
+  Coordinates, dimension and zoom are editable and travel into the link; *Copy link* and *Open seed
+  map* use the same string. **The site refuses to be framed** (`www.chunkbase.com` answers
+  `X-Frame-Options: DENY`), so the map opens in a new tab and the page says exactly that instead of
+  pretending to embed it. The seed only ever travels in the URL fragment, which browsers do not
+  send to a server.
+* **Rendered map (BlueMap)** — below the seed map: BlueMap installation for Paper/Purpur/Folia, real
+  render status read from `bluemap/web/maps`, and a built-in viewer: `/servers/:id/map/view` embeds
+  the renderer's own output, which the panel serves through `/api/servers/:id/map/web/*` with an
+  authenticated, directory-bounded path check (traversal attempts are rejected, unauthenticated
+  requests get 401). Different question, different answer: a seed map *predicts* terrain, BlueMap
+  *renders* the chunks that really exist.
+
+<img src="docs/screenshots/seed-map.png" alt="Seed map built from the world's own level.dat" width="100%">
+
+<img src="docs/screenshots/seed-map-worlds.png" alt="Every world folder with its own Chunkbase link" width="100%">
 
 <img src="docs/screenshots/files-ember.png" alt="File manager" width="100%">
 
@@ -900,7 +913,7 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (19 files, 163 tests)
+bun run test                          # every suite, one process per file (21 files, 205 tests)
 bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```

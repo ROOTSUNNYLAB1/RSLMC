@@ -45,8 +45,16 @@ export function detectWorlds(directory: string): DetectedWorld[] {
     const full = join(directory, folder);
     const levelDat = join(full, "level.dat");
     const meta = readWorldSeed(levelDat);
-    const nether = existsSync(join(full, "DIM-1")) || existsSync(join(full, "dimensions", "minecraft", "the_nether"));
-    const end = existsSync(join(full, "DIM1")) || existsSync(join(full, "dimensions", "minecraft", "the_end"));
+    // Vanilla keeps the Nether/End inside the world folder (DIM-1 / DIM1); Bukkit-style
+    // layouts keep them in sibling folders (world_nether / world_the_end). Both count.
+    const nether =
+      existsSync(join(full, "DIM-1")) ||
+      existsSync(join(full, "dimensions", "minecraft", "the_nether")) ||
+      existsSync(join(directory, `${folder}_nether`, "level.dat"));
+    const end =
+      existsSync(join(full, "DIM1")) ||
+      existsSync(join(full, "dimensions", "minecraft", "the_end")) ||
+      existsSync(join(directory, `${folder}_the_end`, "level.dat"));
     out.push({
       name: folder === mainWorld ? folder : folder,
       folder,
