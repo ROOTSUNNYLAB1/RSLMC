@@ -391,6 +391,13 @@ if [[ $ROOT -eq 0 ]] && have sudo; then
 fi
 run() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
 
+# --user-mode means "everything under $HOME, as me": escalating to root would leave root-owned
+# folders behind and break the very next run as that user.
+if [[ $OPT_USER_MODE -eq 1 ]]; then
+  CAN_ROOT=0
+  SUDO=""
+fi
+
 if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 0 ]]; then
   warn "Not root and sudo is unavailable — continuing as a user-mode install under \$HOME."
   OPT_USER_MODE=1
@@ -881,6 +888,33 @@ ensure_bun() {
 }
 ensure_bun
 
+# A Bun installed for root (bun.sh puts it in /root/.bun/bin/bun) is invisible to the service
+# account: /root is mode 700, so the panel would fail with "Permission denied" the first time it
+# tried to start — and dependency installs would fail before that. Copy it somewhere world-readable
+# and use that path everywhere, including the unit file.
+bun_reachable_by_service() {
+  [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]] || return 0
+  id -u "$RUN_USER" >/dev/null 2>&1 || return 0
+  sudo -u "$RUN_USER" -- "$BUN_BIN" --version >/dev/null 2>&1
+}
+
+if ! bun_reachable_by_service; then
+  REAL_BUN="$(readlink -f "$BUN_BIN" 2>/dev/null || echo "$BUN_BIN")"
+  if [[ -x "$REAL_BUN" ]]; then
+    run install -d -m 0755 /usr/local/bin
+    run install -m 0755 "$REAL_BUN" /usr/local/bin/bun
+    run ln -sf /usr/local/bin/bun /usr/local/bin/bunx
+    BUN_BIN="/usr/local/bin/bun"
+    ok "Copied Bun to /usr/local/bin/bun — ${RUN_USER} cannot read ${REAL_BUN%/*}, and the panel has to run as ${RUN_USER}"
+  else
+    err "Bun at ${BUN_BIN} is not executable — install Bun again or pass a working one on PATH."
+    exit 1
+  fi
+fi
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
+  ok "Bun the service can run: ${BUN_BIN}"
+fi
+
 # ── 2. download ─────────────────────────────────────────────────────────────
 section "Downloading RSLMC ${VERSION}"
 download "$DOWNLOAD_URL" "$WORK/$ARCHIVE" "release archive"
@@ -975,26 +1009,52 @@ ok "Code in place"
 
 rollback() {
   err "Install failed after the swap — restoring the previous code."
+  # The working folder is deleted on exit, so keep a copy of the log where it can still be read.
+  if [[ -n "${LOG_FILE:-}" && -s "$LOG_FILE" ]]; then
+    FAILED_LOG="${DATA_DIR}/logs/install-failed.log"
+    run mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
+    if cp "$LOG_FILE" "$FAILED_LOG" 2>/dev/null || run cp "$LOG_FILE" "$FAILED_LOG" 2>/dev/null; then
+      printf '  %sThe full output is kept at %s%s\n' "$C_GREY" "$FAILED_LOG" "$C_RESET"
+    else
+      cp "$LOG_FILE" "/tmp/rslmc-install-failed.log" 2>/dev/null && \
+        printf '  %sThe full output is kept at /tmp/rslmc-install-failed.log%s\n' "$C_GREY" "$C_RESET"
+    fi
+  fi
   run rm -rf "$INSTALL_PATH"
-  if [[ -d "${INSTALL_PATH}.previous" ]]; then run mv "${INSTALL_PATH}.previous" "$INSTALL_PATH"; fi
+  if [[ -d "${INSTALL_PATH}.previous" ]]; then
+    run mv "${INSTALL_PATH}.previous" "$INSTALL_PATH"
+    ok "Previous installation restored"
+  fi
   exit 1
 }
 
 # ── 5. dependencies + frontend build ────────────────────────────────────────
 # Both steps run as the account the panel will run as: if root did this, public/dist and the bun
 # cache would end up root-owned and the service would fail on its very first write.
+BUN_CACHE="$DATA_DIR/.bun-cache"
 as_service_user() {
   if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]] && id -u "$RUN_USER" >/dev/null 2>&1; then
-    sudo -u "$RUN_USER" -- env HOME="$DATA_DIR" BUN_INSTALL_CACHE_DIR="$WORK/bun-cache" \
+    sudo -u "$RUN_USER" -- env HOME="$DATA_DIR" BUN_INSTALL_CACHE_DIR="$BUN_CACHE" \
       bash -c 'cd "$1" && shift && exec "$@"' _ "$INSTALL_PATH" "$@"
   else
-    ( cd "$INSTALL_PATH" && BUN_INSTALL_CACHE_DIR="$WORK/bun-cache" "$@" )
+    ( cd "$INSTALL_PATH" && BUN_INSTALL_CACHE_DIR="$BUN_CACHE" "$@" )
   fi
 }
+run mkdir -p "$BUN_CACHE"
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then run chown -R "$RUN_USER":"$RUN_USER" "$BUN_CACHE" 2>/dev/null || true; fi
 
 section "Installing dependencies"
 if ! as_service_user "$BUN_BIN" install --production --frozen-lockfile >>"$LOG_FILE" 2>&1; then
-  as_service_user "$BUN_BIN" install --production >>"$LOG_FILE" 2>&1 || rollback
+  dim "the frozen lockfile install failed — retrying without --frozen-lockfile"
+  if ! as_service_user "$BUN_BIN" install --production >>"$LOG_FILE" 2>&1; then
+    err "Installing dependencies failed."
+    printf '  %sLast lines of the output:%s\n' "$C_GREY" "$C_RESET"
+    tail -n 20 "$LOG_FILE" | sed 's/^/    /'
+    printf '\n'
+    say "The panel needs to write to ${INSTALL_PATH} as ${RUN_USER}."
+    say "If the message above says 'Permission denied', check: ls -ld ${INSTALL_PATH} ${BUN_BIN}"
+    rollback
+  fi
 fi
 ok "Dependencies installed ($(du -sh "$INSTALL_PATH/node_modules" 2>/dev/null | cut -f1 || echo 'ok'))"
 
