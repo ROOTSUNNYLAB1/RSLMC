@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-29T09:49:04.195Z",
-  "dataDir": "/tmp/rslmc-pentest-a3WG1Y",
-  "total": 114,
+  "generatedAt": "2026-10-29T15:10:08.714Z",
+  "dataDir": "/tmp/rslmc-pentest-nWUsA1",
+  "total": 125,
   "failed": 0,
   "areas": [
     {
@@ -880,7 +880,7 @@
           "area": "Updates",
           "name": "About reports a CalVer version and the update settings",
           "ok": true,
-          "detail": "2026.10.29.8 interval=360",
+          "detail": "2026.10.29.10 interval=360",
           "severity": "high"
         }
       ]
@@ -1094,6 +1094,101 @@
           "name": "A theme change can never be aimed at another account",
           "ok": true,
           "detail": "extra userId ignored; other account's theme = charcoal",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Nodes",
+      "passed": 11,
+      "total": 11,
+      "rows": [
+        {
+          "id": "node.1",
+          "area": "Nodes",
+          "name": "The agent endpoint refuses a request with no key",
+          "ok": true,
+          "detail": "HTTP 401",
+          "severity": "high"
+        },
+        {
+          "id": "node.2",
+          "area": "Nodes",
+          "name": "A guessed agent key is refused while no key is configured",
+          "ok": true,
+          "detail": "HTTP 401",
+          "severity": "high"
+        },
+        {
+          "id": "node.3",
+          "area": "Nodes",
+          "name": "A bearer token cannot reach normal routes on an unenrolled panel",
+          "ok": true,
+          "detail": "HTTP 401",
+          "severity": "high"
+        },
+        {
+          "id": "node.4",
+          "area": "Nodes",
+          "name": "A user without node.manage cannot register a node",
+          "ok": true,
+          "detail": "HTTP 403",
+          "severity": "high"
+        },
+        {
+          "id": "node.5",
+          "area": "Nodes",
+          "name": "Registering a node without a CSRF token is rejected",
+          "ok": true,
+          "detail": "HTTP 403",
+          "severity": "high"
+        },
+        {
+          "id": "node.6",
+          "area": "Nodes",
+          "name": "A node pointing at this very panel is refused (request loop)",
+          "ok": true,
+          "detail": "HTTP 400 node_self_loop",
+          "severity": "high"
+        },
+        {
+          "id": "node.7",
+          "area": "Nodes",
+          "name": "A registered node's agent key is returned once and is long enough to be unguessable",
+          "ok": true,
+          "detail": "key length 43",
+          "severity": "high"
+        },
+        {
+          "id": "node.8",
+          "area": "Nodes",
+          "name": "The node list never returns the stored agent key",
+          "ok": true,
+          "detail": "key must not appear in GET /api/nodes",
+          "severity": "high"
+        },
+        {
+          "id": "node.9",
+          "area": "Nodes",
+          "name": "A user without node.view cannot read the node list",
+          "ok": true,
+          "detail": "HTTP 403",
+          "severity": "high"
+        },
+        {
+          "id": "node.10",
+          "area": "Nodes",
+          "name": "A user without node.view cannot read the panel's own node state",
+          "ok": true,
+          "detail": "HTTP 403",
+          "severity": "high"
+        },
+        {
+          "id": "node.11",
+          "area": "Nodes",
+          "name": "A traversal attempt through a server path cannot reach node routes",
+          "ok": true,
+          "detail": "HTTP 400",
           "severity": "high"
         }
       ]

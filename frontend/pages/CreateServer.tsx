@@ -38,6 +38,8 @@ export function CreateServerPage() {
   const [error, setError] = useState<string | null>(null);
   const [installInfo, setInstallInfo] = useState<{ id: string; label: string; progress: number; total: number; done: boolean; error?: string } | null>(null);
 
+  const selectedNode = nodes.find((node) => node.id === form.nodeId) ?? null;
+
   const [form, setForm] = useState({
     name: "", description: "", ownerId: 0, nodeId: 0,
     software: "paper" as ServerSoftwareId, mcVersion: "", javaMajor: 0,
@@ -182,10 +184,20 @@ export function CreateServerPage() {
                 {users.map((entry) => <option key={entry.id} value={entry.id}>{entry.username}</option>)}
               </Select>
             </Field>
-            <Field label="Node" required hint="The local node runs on this machine. Additional nodes require the RSLMC agent.">
+            <Field
+              label="Node"
+              required
+              hint={
+                selectedNode && !selectedNode.online
+                  ? "That node is not answering — its servers cannot be created or started until it is back."
+                  : "The machine that will run this server. The local node is this panel."
+              }
+            >
               <Select value={form.nodeId} onChange={(event) => setForm({ ...form, nodeId: Number(event.target.value) })}>
                 {nodes.map((node) => (
-                  <option key={node.id} value={node.id}>{node.name}{node.isLocal ? " (local)" : ""}{node.online ? "" : " — offline"}</option>
+                  <option key={node.id} value={node.id} disabled={!node.isLocal && !node.online}>
+                    {node.name}{node.isLocal ? " (local)" : ""}{node.online ? "" : " — offline"}
+                  </option>
                 ))}
               </Select>
             </Field>

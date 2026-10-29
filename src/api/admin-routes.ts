@@ -16,6 +16,9 @@ import { APP_VERSION, MODE, PORT, PATHS, DATA_LOCATION } from "../shared/config"
 import { backupStorageSummary } from "../services/backups";
 import { pruneOldMetrics } from "../database";
 import { recordAudit } from "../services/audit";
+import { publicNode, assertNoSelfLoop } from "./node-routes";
+import { getNode, probeNode } from "../nodes/client";
+import { generateAgentKey } from "../nodes/agent";
 import { registrationAdminView, writeRegistrationConfig } from "../services/registration";
 import { oauthAdminView, writeOauthConfig } from "../services/oauth";
 import { randomUUID } from "node:crypto";
@@ -240,24 +243,7 @@ export function registerAdminRoutes(api: Router): void {
   api.get("/api/nodes", async (ctx) => {
     requirePermission(ctx.user, "node.view");
     const nodes = query<any>("SELECT * FROM nodes ORDER BY is_local DESC, id");
-    return json({
-      data: nodes.map((node) => {
-        const stats = node.is_local === 1 ? hostStats() : null;
-        return {
-          id: node.id, uuid: node.uuid, name: node.name, description: node.description,
-          fqdn: node.fqdn, scheme: node.scheme, port: node.port, location: node.location,
-          public: node.public === 1, maintenance: node.maintenance === 1,
-          createdAt: node.created_at, lastHeartbeatAt: node.last_heartbeat_at,
-          daemonVersion: node.daemon_version, isLocal: node.is_local === 1,
-          online: node.is_local === 1 || Boolean(node.last_heartbeat_at),
-          stats: stats
-            ? { ...stats, agents: { cgroups: detectCgroups().privileged, privileged: detectCgroups().privileged } }
-            : null,
-          serverCount: queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM servers WHERE node_id = ?", [node.id])?.c ?? 0,
-          meta: node.meta ? JSON.parse(node.meta) : null,
-        };
-      }),
-    });
+    return json({ data: nodes.map((node) => publicNode(node)) });
   });
 
   api.post("/api/nodes", async (ctx) => {
@@ -277,19 +263,45 @@ export function registerAdminRoutes(api: Router): void {
     );
     const exists = queryOne("SELECT id FROM nodes WHERE name = ?", [input.name]);
     if (exists) throw badRequest("A node with that name already exists");
-    const enrollmentToken = randomUUID();
+    // A node that points at this very panel would forward requests into a loop.
+    assertNoSelfLoop(
+      { scheme: input.scheme!, fqdn: input.fqdn!, port: input.port! } as any,
+      PORT,
+    );
+
+    /*
+     * The agent key is generated here and shown exactly once. It is stored on the controller (it has
+     * to be sent with every request) and must be pasted into the node's own panel — that is the whole
+     * enrolment: the node decides whether to trust the controller, not the other way round.
+     */
+    const agentKey = generateAgentKey();
     const id = insert(
-      `INSERT INTO nodes (uuid, name, description, fqdn, scheme, port, location, public, enrollment_token_hash)
+      `INSERT INTO nodes (uuid, name, description, fqdn, scheme, port, location, public, agent_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         randomUUID(), input.name, input.description ?? null, input.fqdn, input.scheme,
-        input.port, input.location ?? null, input.public === false ? 0 : 1,
-        await hashPassword(enrollmentToken),
+        input.port, input.location ?? null, input.public === false ? 0 : 1, agentKey,
       ],
     );
     recordAudit({ actorId: ctx.user!.id, actorName: ctx.user!.username, action: "node.created", ip: ctx.clientIp, targetType: "node", targetId: id });
-    // The enrollment token is shown exactly once, when the node is created.
-    return json({ id, enrollmentToken, message: "Store this token now — it is not shown again." }, { status: 201 });
+
+    // Say hello straight away so the page can tell the operator whether the address is reachable.
+    const node = getNode(id)!;
+    const probe = await probeNode(node);
+    const refreshed = getNode(id)!;
+    return json(
+      {
+        id,
+        agentKey,
+        node: publicNode(refreshed),
+        reachable: probe.ok,
+        probeError: probe.error,
+        message: probe.ok
+          ? "Node registered and reachable. Paste the agent key into that panel to finish enrolling it."
+          : "Node registered. It is not answering yet — finish enrolling it on that machine, then press Test connection.",
+      },
+      { status: 201 },
+    );
   });
 
   api.patch("/api/nodes/:id", async (ctx) => {

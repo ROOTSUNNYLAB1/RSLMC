@@ -107,15 +107,27 @@ export class Router {
   delete(p: string, h: Handler, m?: Route["meta"]) { return this.add("DELETE", p, h, m); }
 
   match(method: string, pathname: string): { route: Route; params: Record<string, string> } | null {
+    /*
+     * Most specific route wins, not "whichever was registered first".
+     *
+     * `/api/nodes/self/key` and `/api/nodes/:id/key` both match `/api/nodes/self/key`. Registration
+     * order decided it before, so adding the static route after the parameterised one silently turned
+     * `self` into a node id and answered "Node not found". Counting the dynamic segments (and then
+     * preferring the longer, more literal pattern) makes a literal path always beat a placeholder.
+     */
+    let best: { route: Route; params: Record<string, string>; score: number } | null = null;
     for (const route of this.routes) {
       if (route.method !== method && !(method === "HEAD" && route.method === "GET")) continue;
       const m = route.regex.exec(pathname);
       if (!m) continue;
       const params: Record<string, string> = {};
       route.keys.forEach((key, i) => { params[key] = decodeURIComponent(m[i + 1] ?? ""); });
-      return { route, params };
+      const dynamic = route.keys.length;
+      // A longer pattern with the same number of placeholders is the more specific one.
+      const score = dynamic * 10_000 - route.pattern.length;
+      if (!best || score < best.score) best = { route, params, score };
     }
-    return null;
+    return best ? { route: best.route, params: best.params } : null;
   }
 
   get size() { return this.routes.length; }

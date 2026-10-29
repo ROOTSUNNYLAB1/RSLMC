@@ -8,6 +8,7 @@ import { ApiException } from "../shared/http";
 import { MIN_ALLOCATION_MB, MAX_ALLOCATION_MB } from "../shared/memory";
 import { playAddress, normalisePublicHost, validatePublicPort } from "../shared/address";
 import { describeEnforcement } from "../resources/enforcement";
+import { getNode, nodeRequestOrThrow, createLink, linkForServer, dropLink } from "../nodes/client";
 import { javaMajorForMcVersion } from "../minecraft/java-requirements";
 import { defaultJvmArgsFor } from "../minecraft/jvm-presets";
 import type { ServerSoftwareId } from "../shared/types";
@@ -387,7 +388,19 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
   } catch (err) {
     throw new ApiException(400, "invalid_public_address", err instanceof Error ? err.message : "Invalid public address");
   }
-  if (!(await isTcpPortFree(bindIp, input.port))) {
+  const node = queryOne<{ id: number; is_local: number; name: string; maintenance: number }>(
+    "SELECT id, is_local, name, maintenance FROM nodes WHERE id = ?", [input.nodeId],
+  );
+  if (!node) throw new ApiException(400, "invalid_node", "Node not found");
+  if (node.maintenance === 1) {
+    throw new ApiException(409, "node_maintenance", `Node "${node.name}" is in maintenance mode and is not accepting new servers.`);
+  }
+  // A remote node's ports are its own: the local port probe above only proves the port is free here.
+  const isRemote = node.is_local !== 1;
+
+  // Only a local server can be probed from here; a remote node checks its own ports when it creates
+  // the server (its answer is what decides, so the panel never claims a port it could not test).
+  if (!isRemote && !(await isTcpPortFree(bindIp, input.port))) {
     throw new ApiException(409, "port_in_use", `Port ${input.port} is already in use on ${bindIp}`);
   }
   const duplicateAllocation = queryOne<{ id: number; name: string }>(
@@ -401,8 +414,6 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
     );
   }
 
-  const node = queryOne<{ id: number }>("SELECT id FROM nodes WHERE id = ?", [input.nodeId]);
-  if (!node) throw new ApiException(400, "invalid_node", "Node not found");
   const owner = queryOne<{ id: number }>("SELECT id FROM users WHERE id = ?", [input.ownerId]);
   if (!owner) throw new ApiException(400, "invalid_owner", "Owner not found");
 
@@ -435,6 +446,66 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
     reserveAllocation(input.nodeId, bindIp, input.port, id, `Primary allocation for ${input.name}`);
     return id;
   });
+
+  if (isRemote) {
+    /*
+     * Remote node: the files live on that machine, so nothing is created here. The node builds the
+     * server with its own installer and answers with the id it assigned; the link table remembers the
+     * pair so every later request can be rewritten onto the node's own path.
+     */
+    const nodeRow = getNode(node.id)!;
+    let created: { server?: { id: number; uuid?: string }; installId?: string };
+    try {
+      const response = await nodeRequestOrThrow(nodeRow, "/api/servers", {
+        method: "POST",
+        body: {
+          name: input.name,
+          description: input.description ?? undefined,
+          // The node has its own accounts; its administrator owns everything created through the
+          // controller, because ownership is decided by this panel, not that one.
+          ownerId: 0,
+          nodeId: 1,
+          software: input.software,
+          mcVersion: input.mcVersion,
+          memoryMb: input.memoryMb,
+          cpuPercent: input.cpuPercent,
+          diskMb: input.diskMb,
+          bindIp,
+          port: input.port,
+          publicHost: publicHost ?? undefined,
+          publicPort: publicPort ?? undefined,
+          javaMajor,
+          jvmArgs: input.jvmArgs ?? "",
+          serverArgs: input.serverArgs ?? "nogui",
+          autoStart: input.autoStart ?? false,
+          crashRecovery: input.crashRecovery ?? false,
+          acceptEula: true,
+        },
+        timeoutMs: 30_000,
+      });
+      created = (response.body as any) ?? {};
+    } catch (error) {
+      // The node refused: roll the local record back so the two panels cannot disagree.
+      run("DELETE FROM servers WHERE id = ?", [serverId]);
+      releaseAllocations(serverId);
+      throw new ApiException(
+        502, "node_create_failed",
+        `Node "${node.name}" refused the server: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const remoteId = created.server?.id;
+    if (!remoteId) {
+      run("DELETE FROM servers WHERE id = ?", [serverId]);
+      releaseAllocations(serverId);
+      throw new ApiException(502, "node_create_failed", `Node "${node.name}" did not return a server id.`);
+    }
+    createLink(serverId, node.id, remoteId, created.server?.uuid ?? uuid);
+    recordActivity({
+      type: "server.created", serverId, target: input.name, actorName: actor,
+      metadata: { software: input.software, mcVersion: input.mcVersion, javaMajor, memoryMb: input.memoryMb, node: node.name },
+    });
+    return { server: getServer(serverId), installId: created.installId ?? `node-${remoteId}` };
+  }
 
   const directory = serverDir(uuid);
   try {
@@ -608,9 +679,35 @@ function initialServerProperties(input: CreateServerInput): string {
   ].join("\n");
 }
 
-export function deleteServer(serverId: number, actor: string, opts: { deleteFiles: boolean; deleteBackups: boolean }): void {
+export async function deleteServer(serverId: number, actor: string, opts: { deleteFiles: boolean; deleteBackups: boolean }): Promise<void> {
   const row = queryOne<any>("SELECT * FROM servers WHERE id = ?", [serverId]);
   if (!row) throw new ApiException(404, "server_not_found", "Server not found");
+
+  /*
+   * A remote server is deleted on the node that runs it. If the node refuses (still running, for
+   * instance) the local record must stay: a row without files behind it is exactly the "ghost server"
+   * this panel used to leave behind.
+   */
+  const link = linkForServer(serverId);
+  if (link) {
+    const node = getNode(link.node_id);
+    if (!node) throw new ApiException(409, "node_missing", "The node that hosts this server no longer exists.");
+    await nodeRequestOrThrow(node, `/api/servers/${link.remote_server_id}`, {
+      method: "DELETE",
+      // The node's own delete route asks for the name as confirmation; the operator already typed it
+      // on this panel, so it is passed along rather than making them type it twice.
+      body: { confirmName: row.name, deleteFiles: opts.deleteFiles, deleteBackups: opts.deleteBackups },
+      timeoutMs: 60_000,
+    });
+    run("DELETE FROM servers WHERE id = ?", [serverId]);
+    releaseAllocations(serverId);
+    dropLink(serverId);
+    recordActivity({
+      type: "server.deleted", serverId: null, target: row.name, actorName: actor, result: "info",
+      metadata: { deleteFiles: opts.deleteFiles, deleteBackups: opts.deleteBackups, node: node.name },
+    });
+    return;
+  }
   if (isRunning(serverId)) throw new ApiException(409, "server_running", "Stop the server before deleting it");
   run("DELETE FROM servers WHERE id = ?", [serverId]);
   // Free the port: without this the allocation row kept the port reserved forever and the

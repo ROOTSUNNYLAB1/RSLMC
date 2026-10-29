@@ -12,7 +12,7 @@ Bun + TypeScript · React · SQLite · CalVer self-updates · Windows, Linux and
 [![React](https://img.shields.io/badge/React-19-149eca?logo=react&logoColor=white)](frontend)
 [![SQLite](https://img.shields.io/badge/SQLite-bun%3Asqlite-003b57?logo=sqlite&logoColor=white)](migrations)
 [![Tests](https://img.shields.io/badge/tests-158%20passing-3ecf72)](#testing)
-[![Security](https://img.shields.io/badge/adversarial%20checks-114%20passing-3ecf72)](SECURITY.md)
+[![Security](https://img.shields.io/badge/adversarial%20checks-125%20passing-3ecf72)](SECURITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-555)](#)
 
 </div>
@@ -33,8 +33,8 @@ database, the HTTP API, the WebSocket console and the game processes themselves.
 command, create a server, watch it boot.
 
 What it deliberately does **not** do: invent numbers. If a limit is not enforced, the panel says so.
-If a feature is not finished (MySQL provisioning, remote node transport), the page says so instead of
-showing a dead button. Every metric, console line and player list comes from the real process.
+If a feature is not finished (MySQL provisioning, for instance), the page says so instead of showing a
+dead button. Every metric, console line and player list comes from the real process.
 
 ---
 
@@ -811,11 +811,11 @@ The panel is audited by an executable harness, not by a checklist: `tests/securi
 throwaway instance and attacks it over HTTP and WebSocket — IDOR, privilege escalation, path traversal
 (with a real symlink escape), zip-slip, SQL injection, prototype pollution, SSRF, command injection,
 CSRF, session fixation, username enumeration, secret disclosure, security headers and resource limits.
-**114 checks, all passing.** Full write-up, including the seven real defects that round found and how each
+**125 checks, all passing.** Full write-up, including the seven real defects that round found and how each
 was fixed, is in [`SECURITY.md`](SECURITY.md).
 
 ```bash
-bun run tests/security/pentest.ts          # 114 checks, non-zero exit on failure
+bun run tests/security/pentest.ts          # 125 checks, non-zero exit on failure
 ```
 
 Hardening that is on by default:
@@ -943,7 +943,7 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
   The picture is used in the sidebar, the account page and the admin users list; without one you get
   the coloured initials, as before. Files live in `<data>/avatars/`, one per account.
 * RBAC with permissions (`server.*`, `node.*`, `user.*`, `role.manage`, `java.manage`,
-  `audit.view`, `system.manage`, …) enforced **server-side** on every route (135 routes); the sidebar only
+  `audit.view`, `system.manage`, …) enforced **server-side** on every route (147 routes); the sidebar only
   renders what your role can open.
 * **Self-update** — CalVer releases, a timer-driven GitHub check, an *Update available* notice with an
   action, a live ten-step install timeline and **Restart RSLMC**, all on *Administration → About*
@@ -951,9 +951,10 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 * Audit log (secret-redacted) and per-server activity feed.
 * Admin area: overview, nodes, users, roles, sign-in providers, Java runtimes, audit, system/maintenance.
 * Notifications with WebSocket push and a live connection indicator.
-* Multi-node: nodes can be registered and their heartbeats tracked. **Server processes currently
-  execute on the local node only** — the agent transport is not finished, and the Nodes page says
-  so instead of implying otherwise.
+* **Multi-node** — a second RSLMC installation becomes a node of this panel, and servers created on
+  it really run there (see *Multiple machines* above). Registration, enrolment with a one-time agent
+  key, a 15 s handshake, per-server proxying (files, console, power, backups, plugins) and deletion
+  that cleans up on both sides. Nothing is simulated: if a node is offline, its servers say so.
 * Databases page: database provisioning is **not implemented** and the page explains what a real
   implementation would require.
 * The panel UI is built from `frontend/` on boot (`public/dist` is generated output). If that bundle
@@ -962,11 +963,41 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 
 ---
 
+## Multiple machines (nodes)
+
+One panel can drive several machines. The panel you use every day is the **controller**; every other
+machine runs its own RSLMC installation and becomes a **node**.
+
+1. Install RSLMC on the second machine exactly as usual and open its *Nodes* page.
+2. On the controller: **Administration → Nodes → New node**, enter that machine's address and port.
+   The panel shows an **agent key** once. (If the address is already reachable, it also says hello
+   immediately — but the node will refuse until step 3.)
+3. On the node: *Administration → Nodes → This panel as a node*, paste the key, **Save key**.
+4. On the controller: **Test connection**. From then on the node reports its real CPU, memory, disk,
+   version and server count every 15 s.
+
+What happens after that:
+
+* Creating a server with that node selected sends the request to the node; the node downloads the jar,
+  installs Java and runs the process **on its own machine**. The controller keeps the account, role and
+  ownership record, so the server appears in your server list like any other.
+* Every per-server request — console, files, properties, players, worlds, backups, plugins, power — is
+  checked against your permissions here and then forwarded; the node sees only the bearer key.
+* Deleting the server on the controller deletes it on the node, including its files and its port
+  allocation. A node that is offline refuses the delete, and the record stays.
+* A node in **maintenance mode** accepts nothing new.
+
+Honest limits: the key exchange is manual, a node treats an accepted controller as its own
+administrator (so treat the key like a root password), and there is no file copy between panels —
+files live on the machine that runs the server.
+
+---
+
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (21 files, 205 tests)
-bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
+bun run test                          # every suite, one process per file (27 files, 233 tests)
+bun run tests/security/pentest.ts     # 125 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```
 
@@ -1021,7 +1052,11 @@ animations are short and respect `prefers-reduced-motion`.
 
 ## Known limitations (stated, not hidden)
 
-* Remote node execution (agent) is not finished — local node only.
+* Multi-node needs a key exchange by hand: paste the controller's agent key into the node once. There
+  is no automatic discovery over the network, and a node trusts a controller's request as that
+  node's administrator — so the key belongs in the same category as a root password.
+* A server on a remote node is edited on that node's own disk; this panel forwards requests to it, so
+  file transfers between panels are not offered.
 * Database provisioning is not implemented.
 * Disk quotas are advisory unless the host has project quotas enabled.
 * BungeeCord artifact URLs come from a Jenkins job whose API returned no metadata; they are marked

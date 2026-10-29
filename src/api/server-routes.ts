@@ -17,6 +17,7 @@ import { CHUNKBASE_DIMENSIONS, CHUNKBASE_PLATFORMS, chunkbasePlatformFor, platfo
 import { SOFTWARE_CATALOG, listVersions, resolveBuild } from "../minecraft/providers";
 import { LOADER_MAP, listInstalled, installVersion, removePlugin, searchProjects, getProject, getVersions, checkUpdates } from "../plugins/modrinth";
 import { installRecommendedPlugins, recommendsPlugins, RECOMMENDED_PLUGINS } from "../plugins/recommended";
+import { fetchIcon } from "../services/marketplace-icons";
 import { JVM_PRESETS, detectJvmPreset, heapMbFor, initialHeapMbFor, defaultJvmArgsFor, isProxySoftware } from "../minecraft/jvm-presets";
 import { MIN_ALLOCATION_MB, MAX_ALLOCATION_MB } from "../shared/memory";
 import { listBackups, createBackup, deleteBackup, restoreBackup, verifyBackup, backupFilePath } from "../services/backups";
@@ -83,7 +84,22 @@ export function registerServerRoutes(api: Router): void {
 
   api.post("/api/servers", async (ctx) => {
     requirePermission(ctx.user, "server.create");
-    const body = await ctx.body();
+    const body = await ctx.body<Record<string, any>>();
+    /*
+     * A request from a controller panel arrives as the synthetic `node-controller` user (id 0). The
+     * node has its own accounts and no idea which of the controller's users clicked Create, so the
+     * server is owned by the node's own administrator — ownership is enforced on the controller,
+     * which is the only place that knows who the operator is.
+     */
+    if (ctx.user!.id === 0) {
+      const localAdmin = queryOne<{ id: number }>(
+        "SELECT id FROM users ORDER BY is_root DESC, id LIMIT 1",
+      );
+      if (!localAdmin) throw badRequest("This node has no administrator account to own the server.");
+      body.ownerId = localAdmin.id;
+      const localNode = queryOne<{ id: number }>("SELECT id FROM nodes WHERE is_local = 1 ORDER BY id LIMIT 1");
+      body.nodeId = localNode?.id ?? 1;
+    }
     const input = validate(
       {
         name: v.string({ min: 2, max: 60 }),
@@ -106,6 +122,9 @@ export function registerServerRoutes(api: Router): void {
         autoStart: v.boolean({ optional: true }),
         crashRecovery: v.boolean({ optional: true }),
         acceptEula: v.boolean(),
+        // Only a controller may stage a server without running the installer straight away (used by
+        // the multi-node test suite and by a controller that configures before installing).
+        install: v.boolean({ optional: true }),
       },
       body,
     );
@@ -130,6 +149,7 @@ export function registerServerRoutes(api: Router): void {
         autoStart: input.autoStart ?? false,
         crashRecovery: input.crashRecovery ?? false,
         acceptEula: input.acceptEula!,
+        install: ctx.user!.id === 0 ? input.install : undefined,
       },
       ctx.user!.username,
     );
@@ -210,7 +230,7 @@ export function registerServerRoutes(api: Router): void {
     const body = await ctx.body<{ confirmName?: string; deleteFiles?: boolean; deleteBackups?: boolean }>();
     const server = getServer(id);
     if (body.confirmName !== server.name) throw badRequest(`Type "${server.name}" to confirm deletion`);
-    deleteServer(id, ctx.user!.username, {
+    await deleteServer(id, ctx.user!.username, {
       deleteFiles: body.deleteFiles === true,
       deleteBackups: body.deleteBackups === true,
     });
@@ -806,6 +826,25 @@ export function registerServerRoutes(api: Router): void {
       offset: Number(ctx.query("offset") ?? 0),
     });
     return json(result);
+  });
+
+  /*
+   * Project icons are proxied by the panel (see services/marketplace-icons.ts): the browser only ever
+   * talks to the panel, so a locked-down network or a strict proxy cannot turn every tile into a
+   * broken image. Only cdn.modrinth.com image URLs are fetched.
+   */
+  api.get("/api/marketplace/icon", async (ctx) => {
+    const target = ctx.query("url") ?? "";
+    const icon = await fetchIcon(target);
+    if (!icon) return new Response("Not found", { status: 404 });
+    return new Response(new Uint8Array(icon.body), {
+      headers: {
+        "content-type": icon.contentType,
+        // Icons are content-addressed by URL upstream; a day of browser caching is plenty.
+        "cache-control": "public, max-age=86400",
+        "x-content-type-options": "nosniff",
+      },
+    });
   });
 
   api.get("/api/marketplace/project/:id", async (ctx) => {

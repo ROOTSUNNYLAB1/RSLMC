@@ -12,6 +12,7 @@ import { hostStats } from "./resources/host";
 import { detectCgroups } from "./resources/cgroups";
 import { startAutoStartServers } from "./services/autostart";
 import { pruneGhostServers } from "./services/servers";
+import { startNodeHeartbeats, stopNodeHeartbeats } from "./nodes/heartbeat";
 
 async function main(): Promise<void> {
   const bootStarted = Date.now();
@@ -58,6 +59,9 @@ async function main(): Promise<void> {
   setInterval(() => {
     try { reconcileForeignProcesses(); } catch { /* transient /proc or PowerShell failure */ }
   }, 15_000).unref?.();
+
+  // Remote nodes: handshake every 15 s, server inventory every 5 s (see nodes/heartbeat.ts).
+  startNodeHeartbeats();
 
   const cgroups = detectCgroups();
   const stats = hostStats();
@@ -232,6 +236,7 @@ const server = Bun.serve({
     console.log(`\n[rslmc] ${signal} received — stopping servers and closing the panel…`);
     stopScheduler();
     stopUpdateWatcher();
+    stopNodeHeartbeats();
     shutdownAll();
     // Give running servers the chance to stop gracefully before the panel exits (bounded).
     await waitForIdle(9000);

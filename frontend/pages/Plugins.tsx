@@ -31,6 +31,43 @@ interface VersionEntry {
   dependencies: { project_id: string | null; dependency_type: string }[];
 }
 
+/*
+ * Project icons go through the panel (`/api/marketplace/icon`), never straight to the CDN: on hosts
+ * behind a strict proxy or a tracker blocker the direct request simply never completes, and every
+ * tile in the catalogue turned into a broken-image glyph. If the panel cannot get the picture either,
+ * the tile falls back to a letter mark instead of an empty box.
+ */
+function ProjectIcon({ url, name, size = 32, radius = 6 }: { url: string | null; name: string; size?: number; radius?: number }) {
+  const [failed, setFailed] = useState(false);
+  const proxied = url ? `/api/marketplace/icon?url=${encodeURIComponent(url)}` : null;
+  if (!proxied || failed) {
+    return (
+      <div
+        aria-hidden
+        style={{
+          width: size, height: size, borderRadius: radius, flex: "none",
+          display: "grid", placeItems: "center",
+          background: "var(--surface-3, #1a1a1e)", color: "var(--text-dim, #8a8a95)",
+          fontSize: Math.round(size * 0.42), fontWeight: 600,
+        }}
+      >
+        {name.trim().charAt(0).toUpperCase() || "?"}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={proxied}
+      alt=""
+      width={size}
+      height={size}
+      loading="lazy"
+      style={{ borderRadius: radius, flex: "none", objectFit: "cover" }}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function PluginsPage({ server }: { server: ServerSummary }) {
   const { can } = useSession();
   const toast = useToast();
@@ -324,11 +361,7 @@ export function PluginsPage({ server }: { server: ServerSummary }) {
                   onClick={() => void openProject(hit)}
                 >
                   <div className="row" style={{ gap: 9, alignItems: "flex-start" }}>
-                    {hit.icon_url ? (
-                      <img src={hit.icon_url} alt="" width={32} height={32} style={{ borderRadius: 6, flex: "none" }} />
-                    ) : (
-                      <div className="player-avatar" style={{ width: 32, height: 32 }}><Package size={14} /></div>
-                    )}
+                    <ProjectIcon url={hit.icon_url} name={hit.title} size={32} radius={6} />
                     <div style={{ minWidth: 0 }}>
                       <div className="row" style={{ gap: 6 }}><strong style={{ fontSize: 12.5 }}>{hit.title}</strong></div>
                       <div className="text-xs faint" style={{ marginTop: 2 }}>{hit.downloads.toLocaleString()} downloads</div>
@@ -355,7 +388,7 @@ export function PluginsPage({ server }: { server: ServerSummary }) {
         {selected ? (
           <>
             <div className="row" style={{ alignItems: "flex-start", gap: 10 }}>
-              {selected.icon_url ? <img src={selected.icon_url} alt="" width={42} height={42} style={{ borderRadius: 8 }} /> : null}
+              <ProjectIcon url={selected.icon_url} name={selected.title ?? selected.slug ?? "?"} size={42} radius={8} />
               <div>
                 <div className="text-sm">{selected.description}</div>
                 <div className="row text-xs faint" style={{ gap: 10, marginTop: 6 }}>

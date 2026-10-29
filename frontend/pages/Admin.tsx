@@ -131,22 +131,63 @@ export function NodesPage() {
   const toast = useToast();
   const { can } = useSession();
   const [nodes, setNodes] = useState<any[] | null>(null);
+  const [self, setSelf] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", fqdn: "", scheme: "https", port: 8443, location: "" });
-  const [token, setToken] = useState<string | null>(null);
+  const [enrolled, setEnrolled] = useState<{ agentKey: string; reachable: boolean; probeError: string | null; node: any } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [keyNode, setKeyNode] = useState<any | null>(null);
+  const [keyValue, setKeyValue] = useState("");
+  const [selfKey, setSelfKey] = useState("");
+  const [selfUrl, setSelfUrl] = useState("");
+  const [deleteNode, setDeleteNode] = useState<any | null>(null);
 
-  const load = () => api.get<{ data: any[] }>("/api/nodes").then((result) => setNodes(result.data)).catch(() => setNodes([]));
-  useEffect(() => { void load(); }, []);
+  const load = () =>
+    Promise.all([
+      api.get<{ data: any[] }>("/api/nodes").then((result) => setNodes(result.data)).catch(() => setNodes([])),
+      api.get<{ self: any }>("/api/nodes/self").then((result) => setSelf(result.self)).catch(() => setSelf(null)),
+    ]);
+
+  useEffect(() => {
+    void load();
+    // Live figures: the controller re-probes every 15 s, so the page follows along without a reload.
+    const timer = setInterval(() => void load(), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const testConnection = async (node: any) => {
+    setTestingId(node.id);
+    try {
+      const result = await api.post<{ ok: boolean; message: string; latencyMs?: number }>(`/api/nodes/${node.id}/test`);
+      if (result.ok) toast.success("Node is online", result.message);
+      else toast.error("Node did not answer", result.message);
+      await load();
+    } catch (error) {
+      toast.fromError(error, "Connection test failed");
+      await load();
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const remoteNodes = (nodes ?? []).filter((node) => !node.isLocal);
+  const localNode = (nodes ?? []).find((node) => node.isLocal);
 
   return (
     <>
       <PageHeader
         title="Nodes"
         icon={<Globe2 size={19} />}
-        subtitle="Machines that run Minecraft servers. The local node runs inline with this panel."
-        actions={<Button variant="primary" icon={<Plus size={14} />} onClick={() => setOpen(true)} disabled={!can("node.manage")}>New node</Button>}
+        subtitle="Machines that run Minecraft servers. The local node is this panel; additional nodes are other RSLMC installations it controls."
+        actions={
+          <div className="row" style={{ gap: 8 }}>
+            <Button icon={<RefreshCw size={14} />} onClick={() => void load()}>Refresh</Button>
+            <Button variant="primary" icon={<Plus size={14} />} onClick={() => setOpen(true)} disabled={!can("node.manage")}>New node</Button>
+          </div>
+        }
       />
+
       {!nodes ? <Loading label="Loading nodes…" /> : (
         <div className="stack">
           {nodes.map((node) => (
@@ -154,67 +195,190 @@ export function NodesPage() {
               key={node.id}
               title={<>{node.name} {node.isLocal ? <Pill tone="blue">local</Pill> : null} {node.maintenance ? <Pill tone="amber">maintenance</Pill> : null}</>}
               icon={<Globe2 size={12} />}
-              actions={<Pill tone={node.online ? "green" : "red"} dot>{node.online ? "online" : "offline"}</Pill>}
+              actions={
+                <div className="row" style={{ gap: 6 }}>
+                  <Pill tone={node.online ? "green" : node.lastStatus === "offline" ? "red" : "neutral"} dot>
+                    {node.online ? "online" : node.lastStatus === "offline" ? "offline" : "not checked yet"}
+                  </Pill>
+                  {!node.isLocal && can("node.manage") ? (
+                    <>
+                      <Button size="sm" icon={<RefreshCw size={12} />} loading={testingId === node.id} onClick={() => void testConnection(node)}>Test</Button>
+                      <Button size="sm" icon={<KeyRound size={12} />} onClick={() => { setKeyNode(node); setKeyValue(""); }}>Key</Button>
+                      <Button size="sm" variant="danger" icon={<Trash2 size={12} />} onClick={() => setDeleteNode(node)}>Delete</Button>
+                    </>
+                  ) : null}
+                </div>
+              }
             >
               <div className="grid grid-3" style={{ gap: 14 }}>
                 <div className="info-list" style={{ margin: -14 }}>
                   <div className="info-row"><span className="k">Address</span><span className="v mono text-xs">{node.scheme}://{node.fqdn}:{node.port}</span></div>
                   <div className="info-row"><span className="k">Location</span><span className="v">{node.location ?? "—"}</span></div>
-                  <div className="info-row"><span className="k">Servers</span><span className="v">{node.serverCount}</span></div>
-                  <div className="info-row"><span className="k">Agent</span><span className="v">{node.daemonVersion ?? "inline (local)"}</span></div>
+                  <div className="info-row"><span className="k">Servers</span><span className="v">{node.serverCount}{node.linkedServers ? ` (${node.linkedServers} this panel)` : ""}</span></div>
+                  <div className="info-row"><span className="k">Version</span><span className="v">{node.daemonVersion ? `RSLMC ${node.daemonVersion}` : node.isLocal ? "this panel" : "unknown"}</span></div>
+                  <div className="info-row">
+                    <span className="k">Last heartbeat</span>
+                    <span className="v">
+                      {node.isLocal ? "not applicable — this panel" : node.lastHeartbeatAt ? relativeTime(node.lastHeartbeatAt) : "never"}
+                    </span>
+                  </div>
                 </div>
+
                 {node.stats ? (
                   <>
                     <div>
                       <div className="card-title" style={{ marginBottom: 6 }}><Cpu size={11} /> CPU</div>
-                      <div className="text-sm">{node.stats.cpuUsagePercent.toFixed(1)}% of {node.stats.cpuCores} cores</div>
-                      <ProgressBar value={node.stats.cpuUsagePercent} />
+                      <div className="text-sm">{Number(node.stats.cpuUsagePercent ?? 0).toFixed(1)}% of {node.stats.cpuCores} cores</div>
+                      <ProgressBar value={Number(node.stats.cpuUsagePercent ?? 0)} />
                       <div className="card-title" style={{ margin: "10px 0 6px" }}><MemoryStick size={11} /> Memory</div>
-                      <div className="text-sm">{formatBytes(node.stats.memoryUsedBytes)} / {formatBytes(node.stats.memoryTotalBytes)}</div>
-                      <ProgressBar value={(node.stats.memoryUsedBytes / node.stats.memoryTotalBytes) * 100} tone="var(--green)" />
+                      <div className="text-sm">{formatBytes(node.stats.memoryUsedBytes ?? 0)} / {formatBytes(node.stats.memoryTotalBytes ?? 0)}</div>
+                      <ProgressBar value={node.stats.memoryTotalBytes ? (node.stats.memoryUsedBytes / node.stats.memoryTotalBytes) * 100 : 0} tone="var(--green)" />
                     </div>
                     <div>
                       <div className="card-title" style={{ marginBottom: 6 }}><HardDrive size={11} /> Disk</div>
-                      <div className="text-sm">{formatBytes(node.stats.diskUsedBytes)} / {formatBytes(node.stats.diskTotalBytes)}</div>
-                      <ProgressBar value={(node.stats.diskUsedBytes / node.stats.diskTotalBytes) * 100} tone="var(--amber)" />
+                      <div className="text-sm">{formatBytes(node.stats.diskUsedBytes ?? 0)} / {formatBytes(node.stats.diskTotalBytes ?? 0)}</div>
+                      <ProgressBar value={node.stats.diskTotalBytes ? (node.stats.diskUsedBytes / node.stats.diskTotalBytes) * 100 : 0} tone="var(--amber)" />
                       <div className="text-xs faint" style={{ marginTop: 10 }}>
-                        {node.stats.os} · {node.stats.arch} · Bun {node.stats.bunVersion}
+                        {node.stats.os ?? "—"} · {node.stats.arch ?? "—"} · Bun {node.stats.bunVersion ?? "—"}
+                        {node.stats.latencyMs !== undefined ? ` · answered in ${node.stats.latencyMs} ms` : ""}
                       </div>
                       <div className="row" style={{ marginTop: 6, gap: 6 }}>
-                        <Pill tone={node.stats.agents.cgroups ? "green" : "amber"}>{node.stats.agents.cgroups ? "cgroups available" : "no cgroups"}</Pill>
+                        <Pill tone={node.stats.agents?.cgroups ? "green" : "amber"}>
+                          {node.stats.agents?.cgroups ? "cgroups enforced" : "limits advisory"}
+                        </Pill>
+                        {node.stats.servers ? <Pill tone="neutral">{node.stats.servers.running}/{node.stats.servers.total} servers running</Pill> : null}
                       </div>
                     </div>
                   </>
                 ) : (
                   <div className="empty" style={{ gridColumn: "span 2" }}>
-                    <p>No heartbeat received from this node yet. Enroll the agent with the token shown at creation time.</p>
+                    <p>
+                      {node.isLocal
+                        ? "This panel is the local node."
+                        : node.lastError
+                          ? node.lastError
+                          : "This node has not been enrolled yet. Register it here, then paste the agent key into that panel's own Nodes page."}
+                    </p>
                   </div>
                 )}
               </div>
             </Card>
           ))}
+
+          {remoteNodes.length > 0 ? (
+            <Card title="What lives where" icon={<Server size={12} />}>
+              <p className="text-sm faint" style={{ margin: 0, lineHeight: 1.6 }}>
+                Server records, users and roles are handled by this panel. The files, the Java process, backups and console
+                of a server on a remote node are handled by that node — this panel forwards your request there after checking
+                that you are allowed to make it. If a node is offline, its servers show as unreachable instead of pretending
+                to be running.
+              </p>
+            </Card>
+          ) : null}
+
+          {/* -------------------------- This panel as a node -------------------------- */}
+          <Card
+            title="This panel as a node"
+            icon={<KeyRound size={12} />}
+            actions={<Pill tone={self?.enabled ? "green" : "neutral"} dot>{self?.enabled ? "enrolled" : "stand-alone"}</Pill>}
+          >
+            {!self ? <Loading label="Reading node state…" /> : self.enabled ? (
+              <div className="stack">
+                <InfoList rows={[
+                  { key: "Role", value: "Node of a controller panel" },
+                  { key: "Controller", value: self.controllerLabel ?? "a controller panel" },
+                  { key: "Key fingerprint", value: <span className="mono text-xs">{self.fingerprint}</span> },
+                  { key: "Requests accepted", value: String(self.requestsAccepted) },
+                  { key: "This panel", value: `RSLMC ${self.panelVersion} · ${self.mode} · port ${self.port}` },
+                ]} />
+                {can("node.manage") ? (
+                  <Button
+                    variant="danger"
+                    icon={<Trash2 size={13} />}
+                    onClick={async () => {
+                      try {
+                        await api.delete("/api/nodes/self/key");
+                        toast.success("Disconnected", "This panel no longer accepts requests from that controller.");
+                        await load();
+                      } catch (error) { toast.fromError(error, "Could not disconnect"); }
+                    }}
+                  >
+                    Disconnect from controller
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="stack">
+                <p className="text-sm faint" style={{ margin: 0, lineHeight: 1.6 }}>
+                  To let another RSLMC panel manage servers on this machine, register this address on that panel and paste
+                  the agent key it shows you here. Nothing changes until a key is saved: until then this panel ignores every
+                  controller request.
+                </p>
+                <div className="form-grid">
+                  <Field label="Agent key" required hint="Shown once, on the controller's Nodes page.">
+                    <Input value={selfKey} onChange={(event) => setSelfKey(event.target.value)} placeholder="paste the key from the controller" />
+                  </Field>
+                  <Field label="Controller URL" hint="Optional — used to verify the link immediately.">
+                    <Input value={selfUrl} onChange={(event) => setSelfUrl(event.target.value)} placeholder="https://panel.example.com" />
+                  </Field>
+                </div>
+                <div className="row">
+                  <Button
+                    variant="primary"
+                    loading={busy}
+                    disabled={!can("node.manage") || selfKey.trim().length < 24}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        const result = await api.post<{ verified: boolean | null; verifyError: string | null }>("/api/nodes/self/key", {
+                          key: selfKey.trim(), controllerUrl: selfUrl.trim() || undefined,
+                        });
+                        if (result.verified) toast.success("Connected", "The controller confirmed the key.");
+                        else if (result.verified === false) toast.error("Key saved, but not confirmed", result.verifyError ?? "The controller did not accept the key.");
+                        else toast.success("Key saved", "This panel now accepts requests from that controller.");
+                        setSelfKey("");
+                        await load();
+                      } catch (error) { toast.fromError(error, "Could not save the key"); }
+                      finally { setBusy(false); }
+                    }}
+                  >
+                    Save key
+                  </Button>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {localNode ? (
+            <Banner tone="info" title="How a second machine is added">
+              1. On the other machine, install RSLMC and open its Nodes page. 2. Here, press <strong>New node</strong> and enter
+              that machine's address — the panel shows an agent key once. 3. Paste that key into the other panel's
+              <strong> This panel as a node</strong> card. 4. Press <strong>Test connection</strong>: the node reports its real
+              CPU, memory and disk from then on.
+            </Banner>
+          ) : null}
         </div>
       )}
 
+      {/* --------------------------------- Register -------------------------------- */}
       <Modal
         open={open}
-        onClose={() => { setOpen(false); setToken(null); }}
+        onClose={() => { setOpen(false); setEnrolled(null); }}
         title="Register a node"
         footer={<>
-          <Button onClick={() => { setOpen(false); setToken(null); }}>Close</Button>
-          {!token ? (
+          <Button onClick={() => { setOpen(false); setEnrolled(null); }}>Close</Button>
+          {!enrolled ? (
             <Button
               variant="primary" loading={busy}
               onClick={async () => {
                 setBusy(true);
                 try {
-                  const result = await api.post<{ enrollmentToken: string }>("/api/nodes", {
+                  const result = await api.post<{ agentKey: string; reachable: boolean; probeError: string | null; node: any; message: string }>("/api/nodes", {
                     name: form.name, description: form.description || undefined, fqdn: form.fqdn,
                     scheme: form.scheme, port: Number(form.port), location: form.location || undefined,
                   });
-                  setToken(result.enrollmentToken);
+                  setEnrolled({ agentKey: result.agentKey, reachable: result.reachable, probeError: result.probeError, node: result.node });
                   await load();
-                  toast.success("Node registered", "Store the enrollment token now — it is shown once.");
                 } catch (err) { toast.fromError(err, "Could not register node"); }
                 finally { setBusy(false); }
               }}
@@ -224,30 +388,87 @@ export function NodesPage() {
           ) : null}
         </>}
       >
-        {token ? (
+        {enrolled ? (
           <div className="stack">
-            <Banner tone="warning" title="Enrollment token — shown once">
-              Place this token in the agent configuration on the target machine, then start the RSLMC agent. The panel will not display it again.
+            <Banner tone={enrolled.reachable ? "success" : "warning"} title={enrolled.reachable ? "Node registered and answering" : "Node registered — not answering yet"}>
+              {enrolled.reachable
+                ? "The address is reachable and the node reported its version. Paste the key below into that panel to finish enrolling it."
+                : `${enrolled.probeError ?? "No answer from that address."} That is expected before the key is installed on the node; after you paste the key, press Test connection.`}
             </Banner>
-            <div className="code-block">{token}</div>
+            <Field label="Agent key — shown once" required>
+              <div className="code-block">{enrolled.agentKey}</div>
+            </Field>
             <div className="text-xs faint">
-              The agent communicates over authenticated TLS and exposes a narrowly scoped command protocol — never a general remote shell.
+              Paste it on the node itself: that panel → Administration → Nodes → <strong>This panel as a node</strong> → Save key.
+              The key is stored hashed on the node; this panel keeps its own copy so it can sign its requests.
             </div>
           </div>
         ) : (
           <div className="form-grid">
             <Field label="Name" required><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="eu-frankfurt-1" /></Field>
             <Field label="Location"><Input value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Frankfurt, DE" /></Field>
-            <Field label="FQDN / IP" required><Input value={form.fqdn} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="node1.example.com" /></Field>
-            <Field label="Agent port"><Input type="number" value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} /></Field>
+            <Field label="Host / IP" required hint="The address this panel can reach the node on."><Input value={form.fqdn} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="node1.example.com" /></Field>
+            <Field label="Port" hint="The node panel's own port."><Input type="number" value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} /></Field>
             <Field label="Scheme"><Select value={form.scheme} onChange={(event) => setForm({ ...form, scheme: event.target.value })}><option value="https">https</option><option value="http">http</option></Select></Field>
             <Field label="Description"><Input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
           </div>
         )}
       </Modal>
-      <Banner tone="info" title="Agent build status">
-        The node agent shares this codebase (Bun + TypeScript) but the packaging step and the remote-transport handshake are not finished in this build. Remote nodes can be registered and tracked, but server processes are only executed on the local node today. This is stated here instead of being hidden.
-      </Banner>
+
+      {/* ---------------------------------- Key ----------------------------------- */}
+      <Modal
+        open={Boolean(keyNode)}
+        onClose={() => setKeyNode(null)}
+        title={`Agent key — ${keyNode?.name ?? ""}`}
+        footer={<>
+          <Button onClick={() => setKeyNode(null)}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={keyValue.trim().length < 24}
+            onClick={async () => {
+              try {
+                const result = await api.post<{ ok: boolean; message: string }>(`/api/nodes/${keyNode.id}/key`, { key: keyValue.trim() });
+                if (result.ok) toast.success("Key accepted", result.message);
+                else toast.error("Key saved, node still unreachable", result.message);
+                setKeyNode(null);
+                setKeyValue("");
+                await load();
+              } catch (error) { toast.fromError(error, "Could not save the key"); }
+            }}
+          >
+            Save and test
+          </Button>
+        </>}
+      >
+        <div className="stack">
+          <p className="text-sm faint" style={{ margin: 0, lineHeight: 1.6 }}>
+            Paste the agent key from the node's own Nodes page. Keys are only ever shown on the node, so this is the only way to
+            pair the two panels again after a reinstall or a key rotation.
+          </p>
+          <Field label="Agent key" required><Input value={keyValue} onChange={(event) => setKeyValue(event.target.value)} /></Field>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={Boolean(deleteNode)}
+        title="Remove this node?"
+        message={
+          deleteNode
+            ? `"${deleteNode.name}" will be forgotten by this panel. ${deleteNode.linkedServers ? `${deleteNode.linkedServers} server(s) created through this panel live on it — delete those first.` : "No servers from this panel live on it."}`
+            : ""
+        }
+        confirmLabel="Remove node"
+        tone="danger"
+        onClose={() => setDeleteNode(null)}
+        onConfirm={async () => {
+          try {
+            await api.delete(`/api/nodes/${deleteNode.id}`);
+            toast.success("Node removed");
+            setDeleteNode(null);
+            await load();
+          } catch (error) { toast.fromError(error, "Could not remove the node"); }
+        }}
+      />
     </>
   );
 }

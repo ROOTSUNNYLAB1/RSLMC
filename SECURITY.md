@@ -5,11 +5,11 @@ panel was attacked over HTTP/WebSocket by an automated harness (`tests/security/
 Everything below was executed against a real instance, not inferred.
 
 ```
-bun run tests/security/pentest.ts          # 114 checks, exit code 1 if any fail
+bun run tests/security/pentest.ts          # 125 checks, exit code 1 if any fail
 bun run tests/security/pentest.ts --json   # machine readable, also written to last-run.json
 ```
 
-Last run: **114 / 114 checks pass, 0 fail** (plus `bun test`: 21 files, 205 tests, 0 fail; `tsc --noEmit` clean).
+Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 27 files, 233 tests, 0 fail; `tsc --noEmit` clean).
 
 ---
 
@@ -156,7 +156,14 @@ bands, background lightness) and that every accent clears 4:1 contrast against i
 * The harness runs against a **development-mode** instance on localhost with `RSLMC_COOKIE_SECURE=never`.
   In production behind TLS the cookie is `Secure` (verified by the `isSecureRequest` tests), but I have
   not run the panel behind nginx/Caddy in this round.
-* **Not tested:** multi-node agent transport (no agent exists yet), the Modrinth download path with a
+* **Multi-node** now has its own checks (`node.1`–`node.11`): the agent surface refuses an unknown or
+  missing key, a bearer token cannot reach normal routes on a panel that never enrolled, node routes
+  need `node.view`/`node.manage`, registering a node without CSRF is refused, a node cannot be pointed
+  at its own panel, the stored agent key is never returned by any list endpoint, and a traversal
+  through a server path cannot reach node routes. Two-panel behaviour (forwarding, deletion, offline
+  handling) is covered by `tests/nodes.test.ts`.
+* **Not tested:** the node link over an untrusted network (the harness runs both panels on localhost,
+  so TLS certificate validation for a remote node is not exercised), the Modrinth download path with a
   hostile upstream response, Java runtime archives from Adoptium (checksums are verified in code but not
   fuzzed), and long-running resource exhaustion.
 * **Not covered:** physical/host compromise, a malicious *administrator* (root can do anything by
@@ -174,7 +181,7 @@ bands, background lightness) and that every accent clears 4:1 contrast against i
 cd rslmc
 bun install
 bun test                              # 205 unit/integration tests (21 files)
-bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
+bun run tests/security/pentest.ts     # 125 adversarial checks against a throwaway instance
 ```
 
 The harness creates its own data directory in `$TMPDIR`, boots the panel on port 3941, seeds two
