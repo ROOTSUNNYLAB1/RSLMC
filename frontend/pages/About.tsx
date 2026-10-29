@@ -564,8 +564,9 @@ export function AboutPage() {
               console, files, players, worlds, backups and schedules in one browser tab.
             </p>
             <p className="about-note muted">
-              One process · SQLite · every file under {data.paths.data} · MIT licence · not affiliated with
-              Mojang, Microsoft or Pterodactyl.
+              Data folder <span className="mono">{data.paths.data}</span> — the database, server
+              directories, backups, Java runtimes and logs all live inside it; source: {data.paths.dataSource}).
+              One process, SQLite, MIT licence. Not affiliated with Mojang, Microsoft or Pterodactyl.
             </p>
             <div className="about-repo-stats">
               <span><Star size={12} /> {data.repository.info?.stars ?? "—"} stars</span>

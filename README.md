@@ -17,6 +17,8 @@ Bun + TypeScript · React · SQLite · CalVer self-updates · Windows, Linux and
 
 </div>
 
+**[Quick start](#running-rslmc)** · **[Your first 15 minutes](#your-first-15-minutes-what-to-click)** · **[Screenshots](#screenshots)** · **[Features](#what-actually-works)** · **[Updating](docs/updating.md)** · **[Limitations](#known-limitations-stated-not-hidden)**
+
 ![RSLMC dashboard](docs/screenshots/dashboard-midnight.png)
 
 <div align="center"><sub>Midnight theme · every theme is one click away in <i>My Profile → Appearance</i></sub></div>
