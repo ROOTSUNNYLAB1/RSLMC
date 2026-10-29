@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest something the panel should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One rule applies to every feature here: **it must be real**. If it cannot be implemented
+        yet, the panel says so rather than showing a button that does nothing.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation, not the solution — that is how the best fixes start.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should the panel do?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Server lifecycle / startup
+        - Console
+        - Files & properties
+        - Players & worlds
+        - Plugins (Modrinth)
+        - Backups
+        - Networking / allocations
+        - Schedules
+        - Accounts, roles & SSO
+        - Appearance / themes
+        - Administration
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: honesty
+    attributes:
+      label: Honesty check
+      options:
+        - label: I understand unsupported features are shown as "not implemented", not faked.
+          required: true

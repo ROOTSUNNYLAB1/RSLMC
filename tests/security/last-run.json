@@ -1,0 +1,991 @@
+{
+  "generatedAt": "2026-10-29T04:17:48.322Z",
+  "dataDir": "/tmp/rslmc-pentest-lyZvdB",
+  "total": 101,
+  "failed": 0,
+  "areas": [
+    {
+      "area": "Authentication",
+      "passed": 6,
+      "total": 6,
+      "rows": [
+        {
+          "id": "auth.1",
+          "area": "Authentication",
+          "name": "Anonymous API access is rejected",
+          "ok": true,
+          "detail": "GET /api/servers → 401",
+          "severity": "high"
+        },
+        {
+          "id": "auth.2",
+          "area": "Authentication",
+          "name": "Anonymous console read is rejected",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "auth.3",
+          "area": "Authentication",
+          "name": "Forged session cookie is rejected",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "auth.11",
+          "area": "Authentication",
+          "name": "Registration info is public but carries no secrets",
+          "ok": true,
+          "detail": "→ 200",
+          "severity": "high"
+        },
+        {
+          "id": "auth.12",
+          "area": "Authentication",
+          "name": "Login does not reveal whether a username exists",
+          "ok": true,
+          "detail": "unknown 401 \"Invalid username or password\" vs wrong-password 401 \"Invalid username or password\"",
+          "severity": "high"
+        },
+        {
+          "id": "auth.13",
+          "area": "Authentication",
+          "name": "Repeated failed logins are rate limited (429)",
+          "ok": true,
+          "detail": "rate limiter engaged",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Session",
+      "passed": 6,
+      "total": 6,
+      "rows": [
+        {
+          "id": "auth.4",
+          "area": "Session",
+          "name": "Session cookie is HttpOnly",
+          "ok": true,
+          "detail": "rslmc_session=<redacted>; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax",
+          "severity": "high"
+        },
+        {
+          "id": "auth.5",
+          "area": "Session",
+          "name": "Session cookie is SameSite",
+          "ok": true,
+          "detail": "SameSite=Lax",
+          "severity": "high"
+        },
+        {
+          "id": "auth.6",
+          "area": "Session",
+          "name": "Session token is long and random (≥ 32 chars)",
+          "ok": true,
+          "detail": "token length ok",
+          "severity": "high"
+        },
+        {
+          "id": "auth.7",
+          "area": "Session",
+          "name": "A new session token is minted on login",
+          "ok": true,
+          "detail": "rotated",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.7",
+          "area": "Session",
+          "name": "A revoked session stops working immediately",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.8",
+          "area": "Session",
+          "name": "Changing a password ends the session that changed it",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "CSRF",
+      "passed": 3,
+      "total": 3,
+      "rows": [
+        {
+          "id": "auth.8",
+          "area": "CSRF",
+          "name": "Mutation without a CSRF token is rejected",
+          "ok": true,
+          "detail": "POST /api/servers without token → 403",
+          "severity": "high"
+        },
+        {
+          "id": "auth.9",
+          "area": "CSRF",
+          "name": "Mutation with a wrong CSRF token is rejected",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "auth.10",
+          "area": "CSRF",
+          "name": "Cross-origin mutation is rejected even with a valid token",
+          "ok": true,
+          "detail": "origin https://evil.example → 403",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Authorization",
+      "passed": 15,
+      "total": 15,
+      "rows": [
+        {
+          "id": "authz.1",
+          "area": "Authorization",
+          "name": "A user cannot read another account's server",
+          "ok": true,
+          "detail": "GET /api/servers/2 → 404",
+          "severity": "high"
+        },
+        {
+          "id": "authz.2",
+          "area": "Authorization",
+          "name": "A user cannot power another account's server",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "authz.3",
+          "area": "Authorization",
+          "name": "A user cannot list another server's files",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "authz.4",
+          "area": "Authorization",
+          "name": "A user cannot read another server's backups",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/users",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/users",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/roles",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/roles",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/audit",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/audit",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/system",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/system",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/admin/overview",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/admin/overview",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.5:/api/nodes",
+          "area": "Authorization",
+          "name": "A plain user is refused /api/nodes",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.10",
+          "area": "Authorization",
+          "name": "A user cannot change their allocation",
+          "ok": true,
+          "detail": "PATCH memoryMb=65536 → 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.11",
+          "area": "Authorization",
+          "name": "A user cannot read the infrastructure settings payload",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.12",
+          "area": "Authorization",
+          "name": "A user keeps access to their own server",
+          "ok": true,
+          "detail": "GET properties → 200",
+          "severity": "high"
+        },
+        {
+          "id": "authz.13",
+          "area": "Authorization",
+          "name": "Disabling an account kills its live session",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.12",
+          "area": "Authorization",
+          "name": "A user can still tune their own server's properties",
+          "ok": true,
+          "detail": "→ 200, motd \"hello there\"",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Privilege escalation",
+      "passed": 8,
+      "total": 8,
+      "rows": [
+        {
+          "id": "authz.6",
+          "area": "Privilege escalation",
+          "name": "A user cannot make themselves root",
+          "ok": true,
+          "detail": "PATCH /api/users/2 {isRoot:true} → 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.7",
+          "area": "Privilege escalation",
+          "name": "A user cannot grant themselves a role",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.8",
+          "area": "Privilege escalation",
+          "name": "A user cannot create roles",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.9",
+          "area": "Privilege escalation",
+          "name": "A user cannot create an administrator account",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.14",
+          "area": "Privilege escalation",
+          "name": "An account manager cannot promote itself to root",
+          "ok": true,
+          "detail": "PATCH own isRoot → 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.15",
+          "area": "Privilege escalation",
+          "name": "An account manager cannot assign itself a role above its own",
+          "ok": true,
+          "detail": "roles:[\"Administrator\"] → 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.16",
+          "area": "Privilege escalation",
+          "name": "An account manager cannot create a root account",
+          "ok": true,
+          "detail": "POST isRoot:true → 403",
+          "severity": "high"
+        },
+        {
+          "id": "authz.17",
+          "area": "Privilege escalation",
+          "name": "An account manager cannot reset the root administrator's password",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Path traversal",
+      "passed": 6,
+      "total": 6,
+      "rows": [
+        {
+          "id": "inj.1",
+          "area": "Path traversal",
+          "name": "File read rejects traversal and absolute paths",
+          "ok": true,
+          "detail": "../../../../etc/passwd → 400 · ..%2F..%2F..%2Fetc%2Fpasswd → 400 · /etc/passwd → 400 · C:\\Windows\\win.ini → 400 · ....//....//etc/passwd → 400 · world/../../../../etc/shadow → 400",
+          "severity": "high"
+        },
+        {
+          "id": "inj.2",
+          "area": "Path traversal",
+          "name": "File download rejects traversal",
+          "ok": true,
+          "detail": "../../../../etc/passwd → 400 · ..%2F..%2F..%2Fetc%2Fpasswd → 400 · /etc/passwd → 400",
+          "severity": "high"
+        },
+        {
+          "id": "inj.3",
+          "area": "Path traversal",
+          "name": "Directory listing rejects traversal",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        },
+        {
+          "id": "inj.4",
+          "area": "Path traversal",
+          "name": "Symlink escape is refused",
+          "ok": true,
+          "detail": "escape/passwd → 400",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.5",
+          "area": "Path traversal",
+          "name": "Player data lookup rejects a path-shaped reference",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.9",
+          "area": "Path traversal",
+          "name": "Upload into a parent path is refused",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Zip-slip",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "inj.5",
+          "area": "Zip-slip",
+          "name": "Archive extraction cannot write outside the server folder",
+          "ok": true,
+          "detail": "upload 400 · extract 400 · file written: false",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "SQL injection",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "inj.6",
+          "area": "SQL injection",
+          "name": "Query parameters are bound, not concatenated",
+          "ok": true,
+          "detail": "/api/servers/1/files/search → 200 · /api/servers → 200 · /api/activity → 200 · /api/audit → 200 · /api/users → 200 · users still present: 4",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Prototype pollution",
+      "passed": 2,
+      "total": 2,
+      "rows": [
+        {
+          "id": "inj.7",
+          "area": "Prototype pollution",
+          "name": "API stays healthy after hostile JSON",
+          "ok": true,
+          "detail": "→ 200",
+          "severity": "high"
+        },
+        {
+          "id": "inj.8",
+          "area": "Prototype pollution",
+          "name": "__proto__ in a JSON body does not pollute Object.prototype",
+          "ok": true,
+          "detail": "status 400 · Object.prototype.polluted = undefined",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "SSRF",
+      "passed": 2,
+      "total": 2,
+      "rows": [
+        {
+          "id": "inj.9",
+          "area": "SSRF",
+          "name": "The public-host field cannot carry a URL or an internal endpoint",
+          "ok": true,
+          "detail": "user → 403 · admin http://169.254.169.254 → 400",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.6",
+          "area": "SSRF",
+          "name": "Marketplace project ids cannot rewrite the upstream URL",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Command injection",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "inj.10",
+          "area": "Command injection",
+          "name": "Console commands are not executed by a shell",
+          "ok": true,
+          "detail": "→ 400 (rejected: server offline; the command never reaches a shell)",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Cross-object access",
+      "passed": 3,
+      "total": 3,
+      "rows": [
+        {
+          "id": "abuse.1",
+          "area": "Cross-object access",
+          "name": "A backup id from another server cannot be restored",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.2",
+          "area": "Cross-object access",
+          "name": "Another server's backup cannot be downloaded",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.3",
+          "area": "Cross-object access",
+          "name": "A schedule id from another server cannot be triggered",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Managed settings",
+      "passed": 2,
+      "total": 2,
+      "rows": [
+        {
+          "id": "abuse.11",
+          "area": "Managed settings",
+          "name": "The typed editor refuses a managed key but saves the rest",
+          "ok": true,
+          "detail": "PUT with server-port → 400 (server-port still undefined)",
+          "severity": "high"
+        },
+        {
+          "id": "abuse.4",
+          "area": "Managed settings",
+          "name": "The raw file editor cannot move a server off its allocated port",
+          "ok": true,
+          "detail": "editor → 200, server-port now 25901",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Input validation",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "abuse.10",
+          "area": "Input validation",
+          "name": "An invalid cron expression is rejected",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Secrets",
+      "passed": 4,
+      "total": 4,
+      "rows": [
+        {
+          "id": "disc.1",
+          "area": "Secrets",
+          "name": "/api/system lists setting keys without their values",
+          "ok": true,
+          "detail": "18 keys, values present: false",
+          "severity": "high"
+        },
+        {
+          "id": "disc.2",
+          "area": "Secrets",
+          "name": "The agent secret is not returned by the API",
+          "ok": true,
+          "detail": "no secret material in payload",
+          "severity": "high"
+        },
+        {
+          "id": "disc.3",
+          "area": "Secrets",
+          "name": "The RCON password is never sent back to the browser",
+          "ok": true,
+          "detail": "not exposed",
+          "severity": "high"
+        },
+        {
+          "id": "disc.4",
+          "area": "Secrets",
+          "name": "Passwords do not appear in the audit log",
+          "ok": true,
+          "detail": "no plaintext password in audit",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Information leak",
+      "passed": 3,
+      "total": 3,
+      "rows": [
+        {
+          "id": "disc.5",
+          "area": "Information leak",
+          "name": "Errors carry no stack trace or absolute path",
+          "ok": true,
+          "detail": "404 · {\"error\":{\"code\":\"server_not_found\",\"message\":\"Server not found\"}}",
+          "severity": "high"
+        },
+        {
+          "id": "disc.6",
+          "area": "Information leak",
+          "name": "Unknown API routes give a flat 404",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "disc.7",
+          "area": "Information leak",
+          "name": "Anonymous setup status exposes no data directory path",
+          "ok": true,
+          "detail": "data dir not exposed",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Headers",
+      "passed": 7,
+      "total": 7,
+      "rows": [
+        {
+          "id": "hdr.1",
+          "area": "Headers",
+          "name": "HTML is served with a correct content type",
+          "ok": true,
+          "detail": "text/html; charset=utf-8",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.2",
+          "area": "Headers",
+          "name": "Clickjacking is blocked (X-Frame-Options)",
+          "ok": true,
+          "detail": "DENY",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.3",
+          "area": "Headers",
+          "name": "MIME sniffing is blocked (nosniff)",
+          "ok": true,
+          "detail": "nosniff",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.4",
+          "area": "Headers",
+          "name": "A referrer policy is set",
+          "ok": true,
+          "detail": "same-origin",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.5",
+          "area": "Headers",
+          "name": "A Content-Security-Policy is set",
+          "ok": true,
+          "detail": "default-src 'self'; script-src 'self'; style-src 'self' 'uns",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.6",
+          "area": "Headers",
+          "name": "API responses are not cacheable",
+          "ok": true,
+          "detail": "no-store",
+          "severity": "high"
+        },
+        {
+          "id": "hdr.7",
+          "area": "Headers",
+          "name": "No permissive CORS for credentialed requests",
+          "ok": true,
+          "detail": "no ACAO",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "WebSocket",
+      "passed": 2,
+      "total": 2,
+      "rows": [
+        {
+          "id": "trans.1",
+          "area": "WebSocket",
+          "name": "Anonymous console socket is refused",
+          "ok": true,
+          "detail": "refused",
+          "severity": "high"
+        },
+        {
+          "id": "trans.2",
+          "area": "WebSocket",
+          "name": "A socket cannot be opened for a server the user does not own",
+          "ok": true,
+          "detail": "refused",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Registration",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "trans.3",
+          "area": "Registration",
+          "name": "Registration is closed when the administrator has not opened it",
+          "ok": true,
+          "detail": "→ 403 registration_closed",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Resource limits",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "trans.4",
+          "area": "Resource limits",
+          "name": "An oversized JSON body is rejected",
+          "ok": true,
+          "detail": "12 MB body → 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Header injection",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "trans.5",
+          "area": "Header injection",
+          "name": "Download filenames cannot inject headers",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Destructive actions",
+      "passed": 1,
+      "total": 1,
+      "rows": [
+        {
+          "id": "trans.6",
+          "area": "Destructive actions",
+          "name": "Deleting a server requires typing its name",
+          "ok": true,
+          "detail": "DELETE without confirmName → 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Single sign-on",
+      "passed": 11,
+      "total": 11,
+      "rows": [
+        {
+          "id": "sso.1",
+          "area": "Single sign-on",
+          "name": "No provider is advertised before it is configured",
+          "ok": true,
+          "detail": "GET /api/auth/oauth/providers → []",
+          "severity": "high"
+        },
+        {
+          "id": "sso.2",
+          "area": "Single sign-on",
+          "name": "An unconfigured provider cannot start a redirect",
+          "ok": true,
+          "detail": "→ 404",
+          "severity": "high"
+        },
+        {
+          "id": "sso.3",
+          "area": "Single sign-on",
+          "name": "Enabling a provider never echoes the stored secret",
+          "ok": true,
+          "detail": "admin view keys: enabled, clientId, secretSet",
+          "severity": "high"
+        },
+        {
+          "id": "sso.4",
+          "area": "Single sign-on",
+          "name": "The authorization redirect is to the provider only and keeps the state HttpOnly",
+          "ok": true,
+          "detail": "→ 302, state length 32, cookie Path=/; Max-Age=600; HttpOnly; SameSite=Lax",
+          "severity": "high"
+        },
+        {
+          "id": "sso.5",
+          "area": "Single sign-on",
+          "name": "A callback without the matching state cookie is refused",
+          "ok": true,
+          "detail": "Location → /login?oauth_error=Discord%20rejected%20the%20sign-in%20(400).",
+          "severity": "high"
+        },
+        {
+          "id": "sso.6",
+          "area": "Single sign-on",
+          "name": "The callback never redirects to a caller-supplied host (no open redirect)",
+          "ok": true,
+          "detail": "Location → /login?oauth_error=The%20sign-in%20link%20expired%20or%20was%20already%20used.%2",
+          "severity": "high"
+        },
+        {
+          "id": "sso.7",
+          "area": "Single sign-on",
+          "name": "A callback state cannot be replayed into a second attempt",
+          "ok": true,
+          "detail": "first → /login?oauth_error=The%20sign-in%20link%20expired%20or%20was%20already%20used.%20Please%20try%20again., replay → /login?oauth_error=The sign-in link expired or was already used. Please try again.",
+          "severity": "high"
+        },
+        {
+          "id": "sso.8",
+          "area": "Single sign-on",
+          "name": "A state is bound to the provider that created it",
+          "ok": true,
+          "detail": "→ /login?oauth_error=That sign-in provider is not enabled.",
+          "severity": "high"
+        },
+        {
+          "id": "sso.9",
+          "area": "Single sign-on",
+          "name": "A forged two-factor ticket is rejected and guessing is rate limited",
+          "ok": true,
+          "detail": "bogus ticket → 400, then 429 after repeated guesses",
+          "severity": "high"
+        },
+        {
+          "id": "sso.10",
+          "area": "Single sign-on",
+          "name": "Only an administrator can read or change the sign-in providers",
+          "ok": true,
+          "detail": "anon 401, user GET 403, user PUT 403, admin without CSRF 403",
+          "severity": "high"
+        },
+        {
+          "id": "sso.11",
+          "area": "Single sign-on",
+          "name": "A user cannot unlink another account's provider identity",
+          "ok": true,
+          "detail": "DELETE /api/users/3/identities/discord → 403",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Profile pictures",
+      "passed": 8,
+      "total": 8,
+      "rows": [
+        {
+          "id": "avatar.1",
+          "area": "Profile pictures",
+          "name": "A real image is accepted and gets a cache-busted URL",
+          "ok": true,
+          "detail": "→ 200 /api/users/2/avatar?v=1",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.2",
+          "area": "Profile pictures",
+          "name": "The stored picture is served back as an image, never as HTML",
+          "ok": true,
+          "detail": "→ 200, content-type image/png",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.3",
+          "area": "Profile pictures",
+          "name": "A script renamed to .png is refused (magic bytes, not the extension)",
+          "ok": true,
+          "detail": "svg-as-png → 400, php-as-gif → 400",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.4",
+          "area": "Profile pictures",
+          "name": "An oversized upload is refused before it reaches the disk",
+          "ok": true,
+          "detail": "3 MB body → 413",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.5",
+          "area": "Profile pictures",
+          "name": "Uploading needs a session and a CSRF token",
+          "ok": true,
+          "detail": "no csrf → 403, anonymous → 401",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.6",
+          "area": "Profile pictures",
+          "name": "A user cannot read another account's picture, and ids stay non-enumerable",
+          "ok": true,
+          "detail": "other account → 403, own (none set) → 404",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.7",
+          "area": "Profile pictures",
+          "name": "The served picture path cannot be steered by the caller",
+          "ok": true,
+          "detail": "→ 200 (query ignored)",
+          "severity": "high"
+        },
+        {
+          "id": "avatar.8",
+          "area": "Profile pictures",
+          "name": "Removing a picture really deletes it",
+          "ok": true,
+          "detail": "delete → 200, afterwards → 404",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Appearance",
+      "passed": 5,
+      "total": 5,
+      "rows": [
+        {
+          "id": "theme.1",
+          "area": "Appearance",
+          "name": "The theme catalogue is available to a signed-in account and non-empty",
+          "ok": true,
+          "detail": "12 themes: charcoal, slate, midnight, ocean, …",
+          "severity": "high"
+        },
+        {
+          "id": "theme.2",
+          "area": "Appearance",
+          "name": "A theme choice is stored on the account and returned by the session",
+          "ok": true,
+          "detail": "PATCH → 200, /api/auth/me theme = ocean",
+          "severity": "high"
+        },
+        {
+          "id": "theme.3",
+          "area": "Appearance",
+          "name": "An unknown or hostile theme id is rejected and nothing changes",
+          "ok": true,
+          "detail": "hostile → 400, unknown → 400, stored theme still ocean",
+          "severity": "high"
+        },
+        {
+          "id": "theme.4",
+          "area": "Appearance",
+          "name": "Changing a theme requires a session and a CSRF token",
+          "ok": true,
+          "detail": "no csrf → 403, anonymous → 401",
+          "severity": "high"
+        },
+        {
+          "id": "theme.5",
+          "area": "Appearance",
+          "name": "A theme change can never be aimed at another account",
+          "ok": true,
+          "detail": "extra userId ignored; other account's theme = charcoal",
+          "severity": "high"
+        }
+      ]
+    }
+  ]
+}

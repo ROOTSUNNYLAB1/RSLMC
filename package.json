@@ -1,0 +1,31 @@
+{
+  "name": "rslmc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RSLMC — Minecraft game server management panel",
+  "module": "src/index.ts",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "bun build frontend/index.html --outdir public/dist --minify --target browser",
+    "setup": "bun scripts/setup.ts",
+    "test": "bun test",
+    "test:integration": "RSLMC_TEST_INTEGRATION=1 bun test tests/integration",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "1.61.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "bun-types": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}

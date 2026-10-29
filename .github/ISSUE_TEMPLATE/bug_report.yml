@@ -1,0 +1,50 @@
+name: Bug report
+description: Something in the panel is wrong, or a number it shows is not real.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not paste secrets (tokens, passwords, server keys).
+        For a **security** issue use *Security → Report a vulnerability* instead of this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to Servers → New server
+        2. Choose Paper 1.21.4, 1024 MB
+        3. Click Create
+        4. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RSLMC version / commit
+      placeholder: 1.0.0 or the commit sha
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux, Windows, macOS, Docker, Other]
+    validations:
+      required: true
+  - type: input
+    id: bun
+    attributes:
+      label: Bun version
+      placeholder: output of `bun --version`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Panel log, browser console, or the exact API response. Redact anything private.
+      render: shell

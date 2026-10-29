@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 272" width="1280" height="272" role="img" aria-label="RSLMC — Minecraft server management panel">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0a0c"/>
+      <stop offset="0.55" stop-color="#0e0e10"/>
+      <stop offset="1" stop-color="#0b0f0c"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.028" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="glow" cx="14%" cy="6%" r="62%">
+      <stop offset="0" stop-color="#3ecf72" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#3ecf72" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="272" fill="url(#bg)"/>
+  <rect width="1280" height="272" fill="url(#grid)"/>
+  <rect width="1280" height="272" fill="url(#glow)"/>
+  <rect x="0" y="271" width="1280" height="1" fill="#1e1e23"/>
+
+  <!-- mark: stacked server rack tiles -->
+  <g transform="translate(96 72)">
+    <rect x="0" y="0" width="56" height="56" rx="12" fill="#101613" stroke="#1f6f45"/>
+    <rect x="12" y="14" width="32" height="7" rx="2" fill="#3ecf72"/>
+    <rect x="12" y="25" width="22" height="7" rx="2" fill="#2a7a4c"/>
+    <rect x="12" y="36" width="27" height="7" rx="2" fill="#1f6f45"/>
+    <circle cx="44" cy="17.5" r="2.5" fill="#8ef0b3"/>
+  </g>
+
+  <text x="176" y="108" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="42" font-weight="700" letter-spacing="4" fill="#f2f3f5">RSLMC</text>
+  <text x="178" y="132" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12.5" letter-spacing="4.5" fill="#6a6c75">MINECRAFT SERVER PANEL</text>
+
+  <text x="96" y="196" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif"
+        font-size="23" font-weight="600" fill="#e8e9ec">Real processes, real metrics, no black boxes.</text>
+  <text x="96" y="222" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, Helvetica, Arial, sans-serif"
+        font-size="14.5" fill="#9b9da5">Create, run and manage Minecraft servers — eleven server flavours, Java 8–25, live console, backups, plugins and role-based access.</text>
+
+  <!-- feature pills -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" fill="#9b9da5">
+    <rect x="906" y="66" width="118" height="28" rx="7" fill="#111114" stroke="#26262c"/>
+    <text x="924" y="84">Bun + TypeScript</text>
+    <rect x="1036" y="66" width="148" height="28" rx="7" fill="#111114" stroke="#26262c"/>
+    <text x="1054" y="84">React 19 · SQLite</text>
+    <rect x="906" y="104" width="96" height="28" rx="7" fill="#111114" stroke="#26262c"/>
+    <text x="924" y="122">12 themes</text>
+    <rect x="1014" y="104" width="170" height="28" rx="7" fill="#111114" stroke="#26262c"/>
+    <text x="1032" y="122">Discord · Google SSO</text>
+    <rect x="906" y="142" width="132" height="28" rx="7" fill="#0f1512" stroke="#1f6f45"/>
+    <text x="924" y="160" fill="#5fdc93">101 security checks</text>
+    <rect x="1050" y="142" width="134" height="28" rx="7" fill="#111114" stroke="#26262c"/>
+    <text x="1068" y="160">Windows + Linux</text>
+  </g>
+</svg>
