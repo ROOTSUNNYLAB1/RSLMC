@@ -1,6 +1,7 @@
 import { Router, json, validate, v, badRequest, notFound, ApiException } from "../shared/http";
 import { requirePermission } from "../auth";
 import { query, queryOne, run } from "../database";
+import { APP_VERSION } from "../shared/config";
 import { probeNode, getNode, nodeRequestOrThrow, nodeIsOnline, type NodeRow } from "../nodes/client";
 import { nodeSelfState, setAgentKey, clearAgentKey, handshakePayload, nodeServerInventory, NODE_API_VERSION, recordAgentEvent } from "../nodes/agent";
 import { recordAudit } from "../services/audit";
@@ -27,7 +28,9 @@ export function publicNode(node: NodeRow) {
     isLocal: node.is_local === 1,
     public: node.public === 1,
     maintenance: node.maintenance === 1,
-    daemonVersion: node.daemon_version,
+    // The local node is this process, so its version is this panel's version — not a heartbeat left
+    // behind by an older build.
+    daemonVersion: node.is_local === 1 ? APP_VERSION : node.daemon_version,
     apiVersion: node.api_version,
     lastHeartbeatAt: node.last_heartbeat_at,
     lastCheckedAt: node.last_checked_at,
