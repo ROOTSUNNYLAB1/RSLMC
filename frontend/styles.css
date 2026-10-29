@@ -2523,3 +2523,163 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
 @media (prefers-reduced-motion: reduce) {
   .theme-swatch:hover:not(:disabled) { transform: none; }
 }
+
+/* ===================================================================== */
+/* Administration → About, update banner, install timeline, restart modal */
+/* Everything below is themed: it uses the same custom properties as the   */
+/* rest of the panel, so all twelve colour themes recolour it correctly.   */
+/* ===================================================================== */
+
+/* ---- slim "update available" strip under the top bar ------------------ */
+.update-strip {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 14px; padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--blue);
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--panel-2, #101014), var(--bg));
+  font-size: 12px; color: var(--text-dim);
+  animation: fade-in 260ms ease both;
+}
+.update-strip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 3px rgba(127,178,255,0.14); }
+.update-strip strong { color: var(--text); font-weight: 600; }
+.update-strip .grow { flex: 1; }
+.update-strip .mono { font-size: 11px; }
+
+/* ---- hero ------------------------------------------------------------ */
+.about-hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start;
+  padding: 18px 18px 16px; margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(62, 207, 114, 0.055), transparent 55%),
+    var(--panel);
+  animation: fade-in 240ms ease both;
+}
+.about-hero-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.about-wordmark { font-size: 11px; font-weight: 700; letter-spacing: 3px; color: var(--text-faint); text-transform: uppercase; }
+.about-version-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.about-version { display: flex; flex-direction: column; gap: 2px; }
+.about-version-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-faint); }
+.about-version-number {
+  font-family: var(--mono); font-size: 34px; line-height: 1.05; letter-spacing: -0.5px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.about-version-scheme { font-size: 11px; color: var(--text-faint); }
+.about-hero-arrow { display: flex; align-items: center; gap: 8px; color: var(--text-faint); }
+.about-hero-arrow .from { font-family: var(--mono); font-size: 13px; color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--text-faint); }
+.about-hero-arrow .to { font-family: var(--mono); font-size: 13px; color: var(--green-text); }
+.about-hero-line { margin: 10px 0 0; font-size: 12.5px; color: var(--text-dim); }
+.about-hero-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.about-hero-meta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 11px; color: var(--text-faint); }
+.about-hero-meta span { display: inline-flex; align-items: center; gap: 5px; }
+.about-hero-side { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.about-mini {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  min-height: 56px;
+  padding: 8px 11px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-sidebar);
+}
+.about-mini .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.9px; color: var(--text-faint); }
+.about-mini .v { font-size: 14px; color: var(--text); font-weight: 600; }
+.about-mini .s { font-size: 10px; color: var(--text-faint); }
+
+/* ---- release notes --------------------------------------------------- */
+.about-release { display: grid; grid-template-columns: minmax(0, 1fr) 268px; gap: 16px; }
+.about-release-side { border-left: 1px solid var(--line-soft); padding-left: 16px; }
+.about-section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--text-faint); margin-bottom: 6px; }
+.about-notes { max-height: 260px; overflow: auto; font-size: 12.5px; line-height: 1.65; color: var(--text-dim); }
+.about-notes h4 { margin: 10px 0 4px; font-size: 12px; color: var(--text); text-transform: uppercase; letter-spacing: 0.7px; }
+.about-notes p { margin: 5px 0; }
+.about-note-li { display: flex; gap: 8px; margin: 3px 0; }
+.about-note-li .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--green); margin-top: 8px; flex: none; }
+.about-code { font-family: var(--mono); font-size: 11.5px; background: var(--bg-sidebar); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 4px; }
+.about-pre {
+  font-family: var(--mono); font-size: 11px; background: var(--bg-sidebar);
+  border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 10px; overflow: auto; color: var(--text-dim);
+}
+.about-note { font-size: 11.5px; line-height: 1.6; color: var(--text-dim); margin: 6px 0 0; }
+
+/* ---- install timeline ------------------------------------------------ */
+.install-timeline { display: flex; flex-direction: column; gap: 2px; }
+.install-step {
+  display: grid; grid-template-columns: 18px 240px minmax(0, 1fr); align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; font-size: 12px;
+  border: 1px solid transparent;
+}
+.install-step .install-step-icon { display: inline-flex; color: var(--text-faint); }
+.install-step .install-step-label { color: var(--text-dim); }
+.install-step .install-step-detail { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.install-step.running { background: rgba(127,178,255,0.06); border-color: rgba(127,178,255,0.18); animation: fade-in 200ms ease both; }
+.install-step.running .install-step-icon { color: var(--blue); }
+.install-step.running .install-step-label { color: var(--text); }
+.install-step.done .install-step-icon { color: var(--green); }
+.install-step.done .install-step-label { color: var(--text); }
+.install-step.failed { background: rgba(242,139,139,0.07); border-color: rgba(242,139,139,0.22); }
+.install-step.failed .install-step-icon { color: var(--red); }
+.install-step.failed .install-step-detail { color: var(--red); white-space: normal; }
+.install-step.skipped .install-step-icon { color: var(--text-faint); }
+.install-step.skipped .install-step-label { color: var(--text-faint); }
+
+/* ---- restart card ---------------------------------------------------- */
+.about-restart { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.about-restart-version { font-family: var(--mono); font-size: 20px; color: var(--green-text); }
+.about-restart-actions { display: flex; gap: 8px; }
+.about-settings { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---- repository ------------------------------------------------------ */
+.about-repo { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 16px; }
+.about-repo-desc { margin: 0 0 8px; font-size: 12.5px; line-height: 1.6; color: var(--text-dim); }
+.about-repo-stats { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--text-dim); }
+.about-repo-stats span { display: inline-flex; align-items: center; gap: 5px; }
+.about-topics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.about-topic {
+  font-size: 10.5px; padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--line-soft); background: var(--bg-sidebar); color: var(--text-dim);
+}
+.about-repo-links { display: flex; flex-direction: column; gap: 6px; padding-left: 16px; border-left: 1px solid var(--line-soft); }
+.about-link {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 6px;
+  font-size: 11.5px; color: var(--text-dim); text-decoration: none;
+  border: 1px solid transparent;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+.about-link:hover { background: var(--bg-sidebar); border-color: var(--line-soft); color: var(--text); }
+.about-releases { margin-top: 14px; display: flex; flex-direction: column; gap: 3px; }
+.about-release-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 6px;
+  text-decoration: none; color: var(--text-dim); font-size: 11.5px;
+  border: 1px solid transparent;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.about-release-row:hover { background: var(--bg-sidebar); border-color: var(--line-soft); }
+.about-release-row.current { border-color: rgba(62, 207, 114, 0.24); background: var(--green-soft); }
+.about-release-row .muted { margin-left: auto; }
+
+/* ---- stack / thanks -------------------------------------------------- */
+.about-stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.about-stack-item { padding: 9px 11px; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--bg-sidebar); }
+.about-stack-item .name { display: block; font-size: 12px; font-weight: 600; color: var(--text); }
+.about-stack-item .role { display: block; font-size: 10.5px; color: var(--text-faint); margin-top: 2px; }
+.about-thanks { margin: 0 0 0 16px; padding: 0; font-size: 11.5px; line-height: 1.7; color: var(--text-dim); }
+
+/* ---- restart overlay ------------------------------------------------- */
+.restart-overlay { display: flex; align-items: center; gap: 14px; padding: 6px 2px; }
+.restart-spinner {
+  width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--bg-sidebar); color: var(--blue); flex: none;
+}
+.restart-title { font-size: 13px; color: var(--text); font-weight: 600; margin-bottom: 2px; }
+
+@media (max-width: 1080px) {
+  .about-hero, .about-release, .about-repo { grid-template-columns: minmax(0, 1fr); }
+  .about-hero-side { grid-template-rows: none; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .about-release-side, .about-repo-links { border-left: none; padding-left: 0; border-top: 1px solid var(--line-soft); padding-top: 12px; }
+  .install-step { grid-template-columns: 18px minmax(0, 1fr); }
+  .install-step .install-step-detail { grid-column: 2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .about-hero, .update-strip, .install-step.running { animation: none; }
+}

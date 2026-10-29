@@ -5,7 +5,9 @@ import { buildFrontend, ensureFrontendBuilt, staticFile } from "./services/front
 import { handleApiRequest, describeRoutes } from "./api";
 import { upgradeWebSocket, websocketHandlers, startWsHeartbeat, wsStats } from "./api/ws";
 import { startScheduler, stopScheduler } from "./services/schedules";
-import { reconcileForeignProcesses, shutdownAll, waitForIdle } from "./processes/manager";
+import { adoptRelays, handOffForPanelRestart, reconcileForeignProcesses, runningServerCount, shutdownAll, waitForIdle } from "./processes/manager";
+import { completeRestartOnBoot, registerRestartHandlers } from "./update/restart";
+import { startUpdateWatcher, stopUpdateWatcher } from "./update/service";
 import { hostStats } from "./resources/host";
 import { detectCgroups } from "./resources/cgroups";
 import { startAutoStartServers } from "./services/autostart";
@@ -31,6 +33,18 @@ async function main(): Promise<void> {
   const build = await buildFrontend();
   if (!build.ok) {
     console.error("[rslmc] The frontend failed to build — the panel UI will not be available until it is fixed.");
+  }
+
+  /*
+   * Servers survive a panel restart inside their relays. Reconnect to them *before* the orphan scan,
+   * so they come back as fully managed (console and all) instead of merely "running but unmanaged".
+   */
+  try {
+    const relays = await adoptRelays();
+    if (relays.adopted > 0) console.log(`[rslmc] reattached to ${relays.adopted} running server(s) that outlived the panel`);
+    if (relays.failed > 0) console.warn(`[rslmc] ${relays.failed} relay(s) could not be reattached — see the server console`);
+  } catch (error) {
+    console.error(`[rslmc] relay adoption failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // A server started before a panel restart has no entry in the process table; adopt it so the UI
@@ -149,8 +163,41 @@ const server = Bun.serve({
     },
   });
 
+  /*
+   * Restart plumbing. The panel can relaunch itself; the handler below is the *only* way it does so,
+   * and it deliberately does not call shutdownAll(): running servers are handed to their relays, so
+   * they never notice the panel was gone.
+   */
+  registerRestartHandlers({
+    handOff: () => handOffForPanelRestart(),
+    async shutdown() {
+      stopUpdateWatcher();
+      stopScheduler();
+      server.stop(true);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      closeDb();
+      console.log("[rslmc] Restart handoff complete — the relauncher will start a new panel process.");
+      process.exit(0);
+    },
+  });
+
+  // Close the loop on a restart that happened before this process booted (timings, notifications).
+  let justRestarted = false;
+  try {
+    const completed = completeRestartOnBoot(runningServerCount());
+    justRestarted = completed.restarted;
+    if (completed.restarted) {
+      console.log(`[rslmc] this boot completed a panel restart${completed.bootMs !== null ? ` (${completed.bootMs} ms)` : ""}; ${completed.serversKept} server(s) were kept running`);
+    }
+  } catch (error) {
+    console.error(`[rslmc] restart bookkeeping failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   startWsHeartbeat();
   startScheduler();
+  // A restart usually follows an install, and the installer deliberately forgets the release it
+  // applied — so re-read the feed in a second instead of leaving the badge blank for a minute.
+  startUpdateWatcher({ checkNow: justRestarted });
   await startAutoStartServers();
 
   const bootMs = Date.now() - bootStarted;
@@ -184,6 +231,7 @@ const server = Bun.serve({
     shuttingDown = true;
     console.log(`\n[rslmc] ${signal} received — stopping servers and closing the panel…`);
     stopScheduler();
+    stopUpdateWatcher();
     shutdownAll();
     // Give running servers the chance to stop gracefully before the panel exits (bounded).
     await waitForIdle(9000);

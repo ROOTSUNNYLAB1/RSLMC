@@ -1,8 +1,8 @@
 {
   "name": "rslmc",
-  "version": "1.0.0",
+  "version": "2026.10.29",
   "private": true,
-  "description": "RSLMC — Minecraft game server management panel",
+  "description": "RSLMC \u2014 Minecraft game server management panel",
   "module": "src/index.ts",
   "type": "module",
   "engines": {
@@ -15,7 +15,8 @@
     "setup": "bun scripts/setup.ts",
     "test": "bun test",
     "test:integration": "RSLMC_TEST_INTEGRATION=1 bun test tests/integration",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "bun scripts/release.ts"
   },
   "dependencies": {
     "lucide-react": "1.61.0",

@@ -27,6 +27,7 @@ export function AdminNav({ active }: { active: string }) {
     { key: "java", label: "Java Runtimes", permission: "java.manage" },
     { key: "audit", label: "Audit Log", permission: "audit.view" },
     { key: "system", label: "System", permission: "system.manage" },
+    { key: "about", label: "About", permission: ["system.manage", "node.view"] },
   ].filter((item) => can(item.permission));
   return (
     <div className="tabs-bar" style={{ marginBottom: 14 }}>

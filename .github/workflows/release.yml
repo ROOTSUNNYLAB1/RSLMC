@@ -1,0 +1,88 @@
+name: Release
+
+# Publishes a release when a CalVer tag is pushed (`v2026.11.02`, `v2026.11.02.1`, …).
+#
+# The panel's own updater downloads the assets produced here:
+#   rslmc-<version>.tar.gz   the code archive it unpacks and swaps in
+#   SHA256SUMS               the checksum it verifies before touching a single file
+#
+# Everything the panel keeps (database, servers, worlds, backups) lives in the data folder and is
+# not part of this archive — that is why an update can never cost an operator their data.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit and integration tests
+        run: bun test
+
+      - name: Derive version from the tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "archive=rslmc-$VERSION.tar.gz" >> "$GITHUB_OUTPUT"
+          if ! grep -q "\"version\": \"$VERSION\"" package.json; then
+            echo "::error::package.json does not say $VERSION — run 'bun run release' before tagging."
+            exit 1
+          fi
+
+      - name: Build the release archive
+        run: |
+          git archive --format=tar --prefix="RSLMC-${{ steps.version.outputs.version }}/" HEAD \
+            | gzip -9 > "${{ steps.version.outputs.archive }}"
+          sha256sum "${{ steps.version.outputs.archive }}" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes_file="$(mktemp)"
+          {
+            echo "RSLMC ${{ steps.version.outputs.version }}"
+            echo
+            echo "Calendar versioning — \`${{ steps.version.outputs.version }}\` means a build from that date."
+            echo
+            echo "### Upgrading a running panel"
+            echo
+            echo "1. Administration → About → **Check for updates**"
+            echo "2. **Install update** — downloads, verifies, backs up and swaps the code (data is never touched)"
+            echo "3. **Restart RSLMC** — running servers stay online; the panel reattaches to them"
+            echo
+            echo "### Checksums"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } > "$notes_file"
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.version.outputs.archive }}" SHA256SUMS \
+            --title "RSLMC ${{ steps.version.outputs.version }}" \
+            --notes-file "$notes_file" \
+            --verify-tag

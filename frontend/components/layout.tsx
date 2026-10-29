@@ -243,6 +243,64 @@ export function useLiveNotifications() {
   });
 }
 
+/**
+ * The "update available" strip.
+ *
+ * It is deliberately quiet: one line, one link, one dismiss. It only appears for accounts that can
+ * actually install (system.manage), because telling a `User` about an update they cannot apply is
+ * just noise. The state comes from the panel itself — the same SQLite row the About page renders —
+ * so it survives page reloads and panel restarts without any extra polling of GitHub.
+ */
+function UpdateStrip() {
+  const [state, setState] = useState<{ version: string; pending: boolean; available: boolean; dismissed: boolean } | null>(null);
+  const { navigate } = useRouter();
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/panel/update", { credentials: "same-origin", cache: "no-store" });
+        if (!response.ok) return;               // a User account: nothing to show
+        const data = await response.json() as any;
+        if (!live) return;
+        if (data?.canManage === false) { setState(null); return; }
+        setState({
+          version: data?.pendingRestartVersion ?? data?.latest?.version ?? "",
+          pending: Boolean(data?.pendingRestartVersion),
+          available: Boolean(data?.updateAvailable) && !data?.dismissed,
+          dismissed: Boolean(data?.dismissed),
+        });
+      } catch { /* offline: the strip simply does not render */ }
+    };
+    void load();
+    // Cheap: it reads a single row. Re-checked every 90 s and whenever the tab regains focus.
+    const timer = setInterval(load, 90_000);
+    const onFocus = () => { void load(); };
+    window.addEventListener("focus", onFocus);
+    return () => { live = false; clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, []);
+
+  if (hidden || !state) return null;
+  if (!state.pending && !state.available) return null;
+
+  return (
+    <div className="update-strip" role="status">
+      <span className="dot" aria-hidden />
+      {state.pending ? (
+        <span><strong>RSLMC {state.version} is installed.</strong> Restart the panel to start running it — servers stay online.</span>
+      ) : (
+        <span><strong>Update available for RSLMC</strong> — {state.version} is published.</span>
+      )}
+      <span className="grow" />
+      <button className="btn btn-sm btn-primary" onClick={() => navigate("/admin/about")}>
+        {state.pending ? "Restart" : "View update"}
+      </button>
+      <button className="icon-btn" aria-label="Dismiss update notice" onClick={() => setHidden(true)}>×</button>
+    </div>
+  );
+}
+
 export function Shell({
   server, crumbs, children,
 }: {
@@ -267,7 +325,10 @@ export function Shell({
       {open ? <div className="sidebar-backdrop mobile-only" onClick={() => setOpen(false)} aria-hidden /> : null}
       <div className="main">
         <TopBar crumbs={crumbs} onToggleSidebar={() => setOpen((value) => !value)} socketState={socketState} />
-        <main className="content" id="main-content">{children}</main>
+        <main className="content" id="main-content">
+          <UpdateStrip />
+          {children}
+        </main>
         <PanelFooter crumbs={crumbs} />
       </div>
     </div>

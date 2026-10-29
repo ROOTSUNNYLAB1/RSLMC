@@ -19,6 +19,9 @@ import { rediscoverWorlds } from "../minecraft/worlds";
 import type { ConsoleLine, ServerMetrics, ServerStatus } from "../shared/types";
 import type { RuntimeState } from "./types";
 import { findJavaProcessForDirectory, invalidateForeignProcessCache, isProcessAlive } from "./orphans";
+import {
+  attachRelay, cleanRelayFiles, isRelayAlive, readRelayState, startRelay, type RelayConnection,
+} from "./relay-client";
 import { playerJoinName, playerLeaveName } from "./console-detect";
 import { heapMbFor, initialHeapMbFor } from "../minecraft/jvm-presets";
 
@@ -28,9 +31,22 @@ const METRIC_INTERVAL_MS = 1_000;
 const METRIC_PERSIST_MS = 15_000;
 const DISK_SAMPLE_MS = 60_000;
 
+/**
+ * The manager does not care whether a server runs directly under the panel or through the relay:
+ * both expose a pid, a stdin-like writer and a kill. Keeping this surface tiny is what allows
+ * "Restart RSLMC" to be a non-event for running servers.
+ */
+export interface ProcessHandle {
+  pid: number | null;
+  stdin: { write(chunk: string): number | void; flush(): void } | null;
+  kill(signal?: string | number): void;
+}
+
 interface ManagedProcess {
   state: RuntimeState;
-  process: ReturnType<typeof Bun.spawn> | null;
+  process: ProcessHandle | null;
+  /** Present when the server is owned by a relay (normal case since 2026.10.29). */
+  relay?: RelayConnection | null;
   stdoutReader?: ReadableStreamDefaultReader<Uint8Array>;
   stderrReader?: ReadableStreamDefaultReader<Uint8Array>;
   metricTimer?: ReturnType<typeof setInterval>;
@@ -532,28 +548,64 @@ export async function startServer(serverId: number, actor = "system"): Promise<v
     }
     entry.state.enforcementMessage = enforcementMessage;
 
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn(plan.command, {
+    const spawnEnv: Record<string, string> = {
+      RSLMC_SERVER_ID: String(serverId),
+      ...(server.rcon_password ? { RSLMC_RCON_PASSWORD: server.rcon_password } : {}),
+    };
+
+    /*
+     * Start through the relay when possible. The relay is a detached process that owns the JVM, so
+     * the server keeps running — with a working console — while the panel restarts itself for an
+     * update. If the relay cannot be brought up, fall back to the classic in-process spawn rather
+     * than refusing to start the server.
+     */
+    let proc: ProcessHandle | null = null;
+    entry.relay = null;
+    if (process.env.RSLMC_SERVER_RELAY !== "0") {
+      const relay = await startRelay({
+        serverId,
+        uuid: server.uuid,
+        command: plan.command as string[],
         cwd: plan.cwd,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: {
-          ...process.env,
-          RSLMC_SERVER_ID: String(serverId),
-          ...(server.rcon_password ? { RSLMC_RCON_PASSWORD: server.rcon_password } : {}),
-        },
-        onExit(_proc, exitCode, signalCode) {
-          handleExit(serverId, exitCode, signalCode);
-        },
+        env: spawnEnv,
+        onLine: (line) => pushLine(serverId, {
+          ts: line.ts,
+          stream: line.stream === "system" ? "stdout" : line.stream,
+          text: line.text,
+        }),
+        onExit: (code, signal) => handleExit(serverId, code, signal),
+        onNotice: (message) => systemLine(serverId, `Relay: ${message}`),
       });
-    } catch (err) {
-      setStatus(serverId, "error");
-      const message = err instanceof Error ? err.message : String(err);
-      entry.state.lastError = message;
-      systemLine(serverId, `Failed to spawn process: ${message}`);
-      throw new ApiException(500, "spawn_failed", `Could not start the server process: ${message}`);
+      if (relay) {
+        entry.relay = relay;
+        proc = relay;
+        entry.state.relayed = true;
+        systemLine(serverId, "Started through the RSLMC relay — this server keeps running if the panel restarts.");
+      } else {
+        systemLine(serverId, "The server relay could not be started; falling back to a direct process. A panel restart will leave this server running but without a console.");
+      }
+    }
+
+    if (!proc) {
+      try {
+        const direct = Bun.spawn(plan.command, {
+          cwd: plan.cwd,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, ...spawnEnv },
+          onExit(_proc, exitCode, signalCode) {
+            handleExit(serverId, exitCode, signalCode);
+          },
+        });
+        proc = direct as unknown as ProcessHandle;
+      } catch (err) {
+        setStatus(serverId, "error");
+        const message = err instanceof Error ? err.message : String(err);
+        entry.state.lastError = message;
+        systemLine(serverId, `Failed to spawn process: ${message}`);
+        throw new ApiException(500, "spawn_failed", `Could not start the server process: ${message}`);
+      }
     }
 
     entry.process = proc;
@@ -565,8 +617,11 @@ export async function startServer(serverId: number, actor = "system"): Promise<v
       if (!attach.ok) systemLine(serverId, `Could not attach process to cgroup: ${attach.message}`);
     }
 
-    readStream(serverId, proc.stdout as ReadableStream<Uint8Array> | undefined, "stdout", entry);
-    readStream(serverId, proc.stderr as ReadableStream<Uint8Array> | undefined, "stderr", entry);
+    const direct = proc as unknown as ReturnType<typeof Bun.spawn>;
+    if (!entry.relay) {
+      readStream(serverId, direct.stdout as ReadableStream<Uint8Array> | undefined, "stdout", entry);
+      readStream(serverId, direct.stderr as ReadableStream<Uint8Array> | undefined, "stderr", entry);
+    }
     startMetrics(serverId, entry);
 
     /*
@@ -647,6 +702,10 @@ function handleExit(serverId: number, exitCode: number | null, signalCode: strin
 
   removeCgroup(serverId);
   entry.state.cgroupAttached = false;
+  entry.state.relayed = false;
+  entry.relay = null;
+  // The relay removes its own state file, but a killed relay cannot: clear ours either way.
+  setTimeout(() => cleanRelayFiles(serverId), 1200);
 
   if (wasRestarting) {
     systemLine(serverId, "Server stopped for restart.");
@@ -876,7 +935,7 @@ export async function restartServer(serverId: number, actor = "system", opts: { 
 function sendCommandRaw(serverId: number, command: string): void {
   const entry = managed.get(serverId);
   if (!entry?.process?.stdin) throw new ApiException(409, "not_running", "Server console is not available");
-  const sink = entry.process.stdin as import("bun").FileSink;
+  const sink = entry.process.stdin;
   sink.write(`${command}\n`);
   sink.flush();
 }
@@ -1103,6 +1162,95 @@ export function isShuttingDown(): boolean {
  * a kernel kill after the grace period, so a panel restart does not look like a crash in the
  * audit log or spam crash notifications.
  */
+/**
+ * Reconnects to servers that are still running under their relay from a *previous* panel process.
+ *
+ * This is the other half of "Restart RSLMC does not stop a single server": the old panel detaches,
+ * the new panel calls this during boot, and every server is back in the process table with its live
+ * console, its pid and its metrics — never having been stopped.
+ */
+export async function adoptRelays(): Promise<{ adopted: number; failed: number }> {
+  let adopted = 0;
+  let failed = 0;
+  const rows = query<{ id: number; uuid: string; name: string }>("SELECT id, uuid, name FROM servers");
+  for (const row of rows) {
+    const existing = managed.get(row.id);
+    if (existing?.process) continue;
+    if (existing?.state.status === "installing") continue;
+    const state = readRelayState(row.id);
+    if (!state) continue;
+    if (!isRelayAlive(state)) {
+      cleanRelayFiles(row.id);
+      continue;
+    }
+    const connection = await attachRelay(row.id, row.uuid, {
+      onLine: (line) => pushLine(row.id, {
+        ts: line.ts,
+        stream: line.stream === "system" ? "stdout" : line.stream,
+        text: line.text,
+      }),
+      onExit: (code, signal) => handleExit(row.id, code, signal),
+      onNotice: (message) => systemLine(row.id, `Relay: ${message}`),
+    });
+    if (!connection) {
+      failed += 1;
+      continue;
+    }
+    const entry = ensureEntry(row.id);
+    entry.process = connection;
+    entry.relay = connection;
+    entry.stoppingRequested = false;
+    entry.restarting = false;
+    entry.state.relayed = true;
+    entry.state.foreign = false;
+    entry.state.pid = connection.pid;
+    entry.state.startedAt = state.startedAt ?? Date.now();
+    entry.state.exitCode = null;
+    entry.state.ready = true;
+    entry.state.lastError = null;
+    setStatus(row.id, "online");
+    startMetrics(row.id, entry);
+    systemLine(
+      row.id,
+      `Console reconnected (pid ${connection.pid ?? "?"}). This server kept running while RSLMC restarted, and the panel took its console back.`,
+    );
+    recordActivity({
+      type: "server.relay_adopted", serverId: row.id, target: row.name,
+      metadata: { pid: connection.pid, relay: connection.state.relayPid },
+    });
+    adopted += 1;
+  }
+  return { adopted, failed };
+}
+
+/**
+ * Runs before the panel process exits for a restart. The opposite of `shutdownAll()`: servers are
+ * left running, every relay connection is closed cleanly (the relay keeps the JVM alive), and no
+ * server is marked offline. Console history is already on disk, so nothing is lost.
+ */
+export function handOffForPanelRestart(): { serversKept: number; relayed: number } {
+  let serversKept = 0;
+  let relayed = 0;
+  for (const [, entry] of managed) {
+    if (!entry.process) continue;
+    serversKept += 1;
+    if (entry.relay) relayed += 1;
+    if (entry.flushTimer) { clearTimeout(entry.flushTimer); entry.flushTimer = undefined; }
+    const pending = entry.pendingLines.splice(0, entry.pendingLines.length);
+    if (pending.length > 0) bus.publish(serverTopic(entry.state.serverId), { type: "console", serverId: entry.state.serverId, lines: pending });
+    stopMetrics(entry.state.serverId);
+    try { entry.relay?.disconnect(); } catch { /* ignore */ }
+    entry.relay = null;
+    entry.process = null; // the next panel process re-attaches; we must not report a process we no longer hold
+  }
+  return { serversKept, relayed };
+}
+
+/** How many servers are currently running (used by the restart dialog and the boot report). */
+export function runningServerCount(): number {
+  return [...managed.values()].filter((entry) => Boolean(entry.process)).length;
+}
+
 export function shutdownAll(): void {
   shuttingDown = true;
   for (const [serverId, entry] of managed) {

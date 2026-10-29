@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-29T04:17:48.322Z",
-  "dataDir": "/tmp/rslmc-pentest-lyZvdB",
-  "total": 101,
+  "generatedAt": "2026-10-29T05:43:01.003Z",
+  "dataDir": "/tmp/rslmc-pentest-ZkTtEB",
+  "total": 114,
   "failed": 0,
   "areas": [
     {
@@ -770,6 +770,117 @@
           "name": "Deleting a server requires typing its name",
           "ok": true,
           "detail": "DELETE without confirmName → 400",
+          "severity": "high"
+        }
+      ]
+    },
+    {
+      "area": "Updates",
+      "passed": 13,
+      "total": 13,
+      "rows": [
+        {
+          "id": "upd.1",
+          "area": "Updates",
+          "name": "Anonymous users cannot read the update state",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "upd.2",
+          "area": "Updates",
+          "name": "Anonymous install attempts are refused",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "upd.3",
+          "area": "Updates",
+          "name": "A plain User can see the version but not the controls",
+          "ok": true,
+          "detail": "→ 200 canManage=false",
+          "severity": "high"
+        },
+        {
+          "id": "upd.4",
+          "area": "Updates",
+          "name": "A plain User cannot trigger an update check",
+          "ok": true,
+          "detail": "→ 403 forbidden",
+          "severity": "high"
+        },
+        {
+          "id": "upd.5",
+          "area": "Updates",
+          "name": "A plain User cannot install an update",
+          "ok": true,
+          "detail": "→ 403 forbidden",
+          "severity": "high"
+        },
+        {
+          "id": "upd.6",
+          "area": "Updates",
+          "name": "A plain User cannot change update settings",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "upd.7",
+          "area": "Updates",
+          "name": "A plain User cannot restart the panel",
+          "ok": true,
+          "detail": "→ 403 forbidden",
+          "severity": "high"
+        },
+        {
+          "id": "upd.8",
+          "area": "Updates",
+          "name": "An update check without a CSRF token is rejected",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "upd.9",
+          "area": "Updates",
+          "name": "A restart without a CSRF token is rejected",
+          "ok": true,
+          "detail": "→ 403",
+          "severity": "high"
+        },
+        {
+          "id": "upd.10",
+          "area": "Updates",
+          "name": "A restart without explicit acknowledgement is refused",
+          "ok": true,
+          "detail": "→ 400",
+          "severity": "high"
+        },
+        {
+          "id": "upd.11",
+          "area": "Updates",
+          "name": "A forged session cannot install an update",
+          "ok": true,
+          "detail": "→ 401",
+          "severity": "high"
+        },
+        {
+          "id": "upd.12",
+          "area": "Updates",
+          "name": "The About payload contains no secrets",
+          "ok": true,
+          "detail": "clean",
+          "severity": "high"
+        },
+        {
+          "id": "upd.13",
+          "area": "Updates",
+          "name": "About reports a CalVer version and the update settings",
+          "ok": true,
+          "detail": "2026.10.29 interval=360",
           "severity": "high"
         }
       ]

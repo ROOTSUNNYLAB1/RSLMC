@@ -16,4 +16,6 @@ export interface RuntimeState {
   enforcementMessage: string | null;
   /** True when the JVM was adopted: it runs this server's directory but RSLMC did not spawn it. */
   foreign: boolean;
+  /** True when the process is owned by an RSLMC relay (survives a panel restart). */
+  relayed?: boolean;
 }

@@ -48,6 +48,7 @@ showing a dead button. Every metric, console line and player list comes from the
 | **Discord + Google sign-in** | Optional SSO, configured entirely in the admin panel. Google goes through **Firebase**; no browser SDK, strict CSP kept. |
 | **Roles that mean something** | Permissions enforced server-side on every route, per-account server allocation, force-kill allowed for plain users but never destructive admin actions. |
 | **Profile pictures** | Upload/replace/remove, magic-byte validated, served through an authenticated route. |
+| **Updates itself, safely** | CalVer releases checked against GitHub on a timer, an "Update available" notice with an action, a step-by-step install log on *Administration → About*, and a **Restart RSLMC** button that relaunches the panel while **every server keeps running**. |
 | **Schedules, notifications, audit** | Cron-style schedules, WebSocket notifications, secret-redacted audit trail. |
 | **Windows + Linux + macOS** | No `unix shell` assumptions; data lives in `%ProgramData%\RSLMC`, `/opt/rslmc` or `~/Library/Application Support/RSLMC`. |
 
@@ -71,6 +72,37 @@ showing a dead button. Every metric, console line and player list comes from the
 <tr>
 <td><img src="docs/screenshots/profile-avatar.png" alt="Profile picture upload"><br><sub><b>My Profile</b> — drag a file onto the circle, or pick one.</sub></td>
 <td><img src="docs/screenshots/security-headers.png" alt="Console under a strict CSP"><br><sub><b>Live console</b> under a strict CSP (<code>script-src 'self'</code>) — no violations.</sub></td>
+</tr>
+</table>
+
+### The same panel in twelve themes
+
+One layout, twelve palettes. A theme changes the chrome and nothing else — a green RUNNING badge stays green in every one of them.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/overview-midnight.png" alt="Overview · Midnight"><br><sub><b>Overview · Midnight</b> — Server overview — CPU, memory, players, disk and uptime, all measured from the process.</sub></td>
+<td width="50%"><img src="docs/screenshots/console-ocean.png" alt="Console · Ocean"><br><sub><b>Console · Ocean</b> — Live console: real stdout, ANSI colours, filter, pause, download.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/files-ember.png" alt="Files · Ember"><br><sub><b>Files · Ember</b> — File manager and the typed server.properties editor behind it.</sub></td>
+<td width="50%"><img src="docs/screenshots/players-violet.png" alt="Players · Violet"><br><sub><b>Players · Violet</b> — Player inspector with online list, whitelist, ops and bans.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/plugins-forest.png" alt="Plugins · Forest"><br><sub><b>Plugins · Forest</b> — Modrinth marketplace — real newest-first version pickers.</sub></td>
+<td width="50%"><img src="docs/screenshots/worlds-plum.png" alt="Worlds · Plum"><br><sub><b>Worlds · Plum</b> — World management: switch, clone, delete, verify.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/properties-slate.png" alt="Properties · Slate"><br><sub><b>Properties · Slate</b> — Typed properties editor; allocation-owned keys are locked.</sub></td>
+<td width="50%"><img src="docs/screenshots/backups-sand.png" alt="Backups · Sand"><br><sub><b>Backups · Sand</b> — tar.gz snapshots with verified restore and honest progress.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/schedules-crimson.png" alt="Schedules · Crimson"><br><sub><b>Schedules · Crimson</b> — Cron-style schedules that really execute.</sub></td>
+<td width="50%"><img src="docs/screenshots/servers-charcoal.png" alt="Servers · Charcoal"><br><sub><b>Servers · Charcoal</b> — every server in one table: status, software, address, players, memory, CPU, uptime.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/dashboard-graphite.png" alt="Dashboard · Graphite"><br><sub><b>Dashboard · Graphite</b> — The account dashboard with live totals and recent activity.</sub></td>
+<td width="50%"><img src="docs/screenshots/about-rose.png" alt="About · Rose"><br><sub><b>About · Rose</b> — Administration → About: build, update channel and restart history.</sub></td>
 </tr>
 </table>
 
@@ -105,6 +137,9 @@ this state and `System → Security` reports it.
 | `RSLMC_DATA_DIR`     | platform default (see below) | Data root override (database, servers, Java, backups) |
 | `RSLMC_SECRET`       | generated     | Cookie signing secret; **required** (≥32 chars) in production   |
 | `RSLMC_TRUST_PROXY`  | `false`       | Trust `X-Forwarded-*` headers from a reverse proxy             |
+| `RSLMC_SERVER_RELAY` | `1`           | `0` disables the per-server relay (see *Self-update and restart*) |
+| `RSLMC_GITHUB_REPO`  | `ROOTSUNNYLAB1/RSLMC` | Which repository the updater reads                    |
+| `RSLMC_GITHUB_API`   | `https://api.github.com` | API base — only useful for a mirror or the test feed |
 
 ### Where the data lives (one folder, per platform)
 
@@ -170,6 +205,87 @@ Backing up is just as simple: zip that one folder.
 
 ---
 
+## Self-update and restart (CalVer)
+
+RSLMC updates itself from its own GitHub releases. No SSH, no upload, no file copying — and, the part
+that matters on a live host, **an update never stops a Minecraft server**. The full reference lives in
+[`docs/updating.md`](docs/updating.md); this is the short version.
+
+**Versions are dates.** `2026.11.02` is a build from 2 November 2026; a second release that day is
+`2026.11.02.1`. `version` in `package.json` is the only source of truth — the startup banner, the
+`x-rslmc-version` header, the sidebar footer and the updater all read that one string.
+
+**It checks continuously.** `src/update/service.ts` polls the public GitHub releases API
+(`GET /repos/ROOTSUNNYLAB1/RSLMC/releases`) on the interval set in *Administration → About → Update
+channel* (six hours by default, thirty minutes minimum; automatic checks and pre-releases are both
+switchable). The answer is stored in SQLite, so the badge is instant after a restart and the UI never
+waits on the network. When something newer appears:
+
+* every administrator gets a **notification** (`panel_update`) plus a strip under the top bar —
+  *“Update available for RSLMC — 2026.11.02 is published.”* with a **View update** button;
+* the bell in the header carries the same item, and a WebSocket event (`panel.update`) refreshes
+  every open tab without polling;
+* dismissing silences that one version — a newer release re-opens it.
+
+**Administration → About is the whole story in one page:** the running build with its CalVer date and
+an explicit arrow to the new one, build/runtime/uptime, the API route count, the data root and its
+size, what is actually enforced (memory, CPU, disk), the release notes rendered as Markdown, checksum
+status, the update channel settings, the full install timeline and the restart history. Every value is
+read from the process, the database or GitHub at request time.
+
+**Install Update** is a real installer, and it narrates itself while it runs:
+
+| # | Step | What it proves before moving on |
+|---|------|---------------------------------|
+| 1 | Reading the release manifest | asset name and version come from the release, not from a guess |
+| 2 | Checking free space and write access | staging folder inside the data root, with the free MB it found |
+| 3 | Downloading the release archive | byte count, streamed into `<data>/temporary/update-<version>` |
+| 4 | Verifying the archive | SHA-256 compared against the published `SHA256SUMS` |
+| 5 | Unpacking into a staging folder | how many files were unpacked |
+| 6 | Checking the new build | `package.json`, the source folders and `migrations/` must be present |
+| 7 | Saving a rollback copy of the current build | `code-<from>-<timestamp>.tar.gz` in the backup folder |
+| 8 | Installing the new files | items replaced; **the database, `servers/`, `backups/`, `java/` and `logs/` are not touched** |
+| 9 | Updating dependencies | `bun install`, only when `package.json` changed |
+| 10 | Ready to restart | the new code is on disk; the running process is still the old one |
+
+A failure stops the job, keeps the old code in place (or restores the rollback archive) and says which
+step failed and why. The panel never half-installs and never invents a success.
+
+**Restart RSLMC** asks for confirmation, then hands every running server to its relay, closes the HTTP
+and WebSocket listeners, and a small detached relauncher starts the new process, waits for the port and
+records how long the boot took. The page you are looking at reconnects on its own; the restart history
+shows *reason · who · boot time · servers kept*.
+
+```
+panel ──loopback TCP (random port + 32-byte token)──▶ relay ──pipes──▶ java
+```
+
+The relay (`src/processes/relay.ts`) is spawned per server and owns the JVM, so a panel restart changes
+nothing about a running server: stdout continues, `stop` is still graceful, metrics keep sampling. If a
+host cannot use the relay the panel says so and falls back to a direct spawn — then a restart still
+keeps the servers alive by adoption, but their console history restarts. That difference is reported in
+the console instead of being papered over.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/update-hero.png" alt="Update available on the About page"><br><sub><b>Update available</b> — CalVer dates, the release arrow, one button.</sub></td>
+<td width="50%"><img src="docs/screenshots/update-up-to-date.png" alt="Up to date after installing and restarting"><br><sub><b>Up to date</b> — the same page after install + restart.</sub></td>
+</tr>
+<tr>
+<td colspan="2"><img src="docs/screenshots/update-install-live.png" alt="Live install timeline"><br><sub><b>Install Update, in progress</b> — each step carries the evidence it checked: asset name, free space, SHA-256, file counts, rollback archive.</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/restart-history.png" alt="Restart history after a live restart"><br><sub><b>Restart history</b> — a real restart on a live instance: boot 0.7 s, <b>1 server kept running</b>.</sub></td>
+<td><img src="docs/screenshots/update-restart-confirm.png" alt="Restart confirmation"><br><sub><b>Restart RSLMC</b> — the dialog states that servers are handed over, not stopped.</sub></td>
+</tr>
+</table>
+
+<img src="docs/screenshots/update-restarting.png" alt="Panel restarting" width="100%">
+
+---
+
+---
+
 ## What actually works
 
 Everything below is executed against the real filesystem, the real kernel and the real Mojang /
@@ -215,6 +331,9 @@ says so instead of pretending.
   byte is optional — capture paths that strip it (leaving `[38;2;…m`) are parsed the same way.
   Copy and log download always give clean text, and severity tinting (`ERROR`/`WARN`) is computed
   on the plain text so colour codes can never hide a failure.
+
+<img src="docs/screenshots/overview-midnight.png" alt="Server overview with measured resources" width="100%">
+
 
 ### Software installation (no mocks)
 
@@ -416,6 +535,9 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
 * `tests/console-detect.test.ts` covers the colour-code regression, bracketed join messages, leave /
   disconnect lines and unrelated output (`bun test`).
 
+<img src="docs/screenshots/players-violet.png" alt="Players page" width="100%">
+
+
 ### Files, properties, players, worlds, plugins
 
 * **Files** — breadcrumb navigation, upload (multipart), mkdir, rename/move, copy, bulk delete,
@@ -461,6 +583,9 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
   directory-bounded path check (traversal attempts are rejected, unauthenticated requests get 401).
   When there is no renderer the page shows a setup screen and explains why a seed cannot draw a
   real map.
+
+<img src="docs/screenshots/files-ember.png" alt="File manager" width="100%">
+
 
 ### Running behind a proxy, or on plain HTTP
 
@@ -615,8 +740,11 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
   The picture is used in the sidebar, the account page and the admin users list; without one you get
   the coloured initials, as before. Files live in `<data>/avatars/`, one per account.
 * RBAC with permissions (`server.*`, `node.*`, `user.*`, `role.manage`, `java.manage`,
-  `audit.view`, `system.manage`, …) enforced **server-side** on every route (119 routes); the sidebar only
+  `audit.view`, `system.manage`, …) enforced **server-side** on every route (135 routes); the sidebar only
   renders what your role can open.
+* **Self-update** — CalVer releases, a timer-driven GitHub check, an *Update available* notice with an
+  action, a live ten-step install timeline and **Restart RSLMC**, all on *Administration → About*
+  (see *Self-update and restart* above).
 * Audit log (secret-redacted) and per-server activity feed.
 * Admin area: overview, nodes, users, roles, sign-in providers, Java runtimes, audit, system/maintenance.
 * Notifications with WebSocket push and a live connection indicator.
@@ -634,8 +762,8 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 ## Testing
 
 ```bash
-bun test                              # 106 unit + integration tests (11 files)
-bun run tests/security/pentest.ts     # 101 adversarial checks against a throwaway instance
+bun test                              # 152 unit + integration tests (17 files)
+bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```
 
@@ -662,18 +790,22 @@ src/
                properties, players, worlds, Java requirements,
                nbt-file (NBT read/write), player-data (playerdata .dat editing)
   plugins/     Modrinth client
-  processes/   real process manager, metrics sampling, console piping
+  processes/   real process manager, metrics sampling, console piping, per-server relay
   resources/   /proc stats, disk usage, cgroup v2 helper, enforcement reporting
   security/    path sandboxing, redaction, rate limiting, password policy, TOTP
   services/    servers, backups, schedules, cron, downloads, notifications, audit, bootstrap
-  shared/      config, http helpers, permissions, types
-migrations/    SQL schema (001_init.sql, 002_subusers.sql)
+  shared/      config, http helpers, permissions, types, calver
+  update/      GitHub release client, CalVer comparison, installer, restart + relauncher
+migrations/    SQL schema, 001_init.sql … 012_updates.sql (applied in order, never rewritten)
 frontend/
   lib/         api client, WebSocket client, router, session/toast providers, formatters
   components/  UI primitives, charts, console, layout (sidebar, topbar, footer)
   pages/       one file per screen
   styles.css   design system (near-black panels, accent rules, reduced-motion support)
-runtime/       live data: database/rslmc.db, java/, servers/, backups/, logs/, temporary/
+runtime/       live data: database/rslmc.db, java/, servers/, backups/, logs/, temporary/,
+               relays/ (handshake files for running servers)
+scripts/       release.ts (CalVer bump + release notes), restart-panel.ts (the relauncher),
+               move-data.ts, publish.sh
 ```
 
 ## Design
@@ -692,6 +824,13 @@ animations are short and respect `prefers-reduced-motion`.
 * BungeeCord artifact URLs come from a Jenkins job whose API returned no metadata; they are marked
   as unverified.
 * BlueMap rendering is only offered automatically for Paper/Purpur/Folia.
+* Server survival across a panel restart relies on the per-server relay, which talks over
+  `127.0.0.1`. With `RSLMC_SERVER_RELAY=0` (or a host that blocks loopback binding) servers are
+  still adopted after a restart, but their console history restarts. If you run the panel under a
+  supervisor that kills the whole process group on exit, restart the panel through that supervisor
+  instead — RSLMC says as much on the page.
+* An update needs write access to the code folder. Read-only deployments must keep updating by
+  replacing the code by hand; the About page reports the failed step instead of pretending.
 
 ---
 

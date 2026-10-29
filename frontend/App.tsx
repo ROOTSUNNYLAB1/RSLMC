@@ -25,6 +25,7 @@ import { ActivityPage } from "./pages/Activity";
 import { CreateServerPage } from "./pages/CreateServer";
 import { AccountPage, NotificationsPage } from "./pages/Account";
 import { AdminDashboardPage, AdminNav, AuditPage, JavaPage, NodesPage, RolesPage, SignInPage, SystemPage, UsersPage } from "./pages/Admin";
+import { AboutPage } from "./pages/About";
 
 interface SetupStatus {
   needsSetup: boolean;
@@ -67,6 +68,7 @@ const ADMIN_PAGES: Record<string, { label: string; permission: string | string[]
   java: { label: "Java Runtimes", permission: "java.manage" },
   audit: { label: "Audit Log", permission: "audit.view" },
   system: { label: "System", permission: "system.manage" },
+  about: { label: "About", permission: ["system.manage", "node.view"] },
 };
 
 function Splash({ label = "Loading RSLMC…" }: { label?: string }) {
@@ -225,7 +227,8 @@ export function App() {
                     : key === "signin" ? <SignInPage />
                     : key === "java" ? <JavaPage />
                       : key === "audit" ? <AuditPage />
-                        : <SystemPage />;
+                        : key === "about" ? <AboutPage />
+                          : <SystemPage />;
         return (
           <Permissioned permission={meta.permission}>
             <AdminNav active={key} />

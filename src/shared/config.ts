@@ -28,7 +28,24 @@ function readEnvFile(path: string): Record<string, string> {
 const fileEnv = readEnvFile(join(ROOT, ".env"));
 const env = (key: string, fallback = ""): string => process.env[key] ?? fileEnv[key] ?? fallback;
 
-export const APP_VERSION = "1.0.0";
+/**
+ * Panel version — Calendar Versioning (`YYYY.MM.DD`, optional same-day revision). The single source
+ * of truth is package.json, so `bun pm version` and the update checker can never disagree.
+ */
+function readAppVersion(): string {
+  try {
+    const raw = readFileSync(join(ROOT, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { version?: string };
+    const version = (parsed.version ?? "").trim();
+    // Guard against a fork that still carries a semver string: the About page and the updater both
+    // expect CalVer, and a silent fallback is better than a 500 in the middle of an update.
+    return /^v?\d{4}\.\d{1,2}\.\d{1,2}/.test(version) ? version.replace(/^v/, "") : "2026.10.29";
+  } catch {
+    return "2026.10.29";
+  }
+}
+
+export const APP_VERSION = readAppVersion();
 export const ROOT_DIR = ROOT;
 export const MODE: PanelMode = (env("RSLMC_MODE", "development") === "production" ? "production" : "development");
 export const PORT = Number(env("RSLMC_PORT", "3000"));

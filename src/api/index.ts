@@ -6,6 +6,7 @@ import { registerAuthRoutes } from "./auth-routes";
 import { registerServerRoutes } from "./server-routes";
 import { registerFileRoutes } from "./file-routes";
 import { registerAdminRoutes } from "./admin-routes";
+import { registerPanelRoutes } from "./panel-routes";
 import type { RequestContext } from "../shared/http";
 import type { Permission } from "../shared/permissions";
 
@@ -14,6 +15,7 @@ registerAuthRoutes(api);
 registerServerRoutes(api);
 registerFileRoutes(api);
 registerAdminRoutes(api);
+registerPanelRoutes(api);
 
 /** Routes that are reachable without a session. */
 const PUBLIC_ROUTES = new Set([

@@ -301,14 +301,27 @@ function runtimeRuns(path: string): boolean {
   const executable = javaExecutablePath(path);
   if (!ensureExecutable(executable)) return false;
   let ok = false;
+  let timedOut = false;
   try {
-    const result = Bun.spawnSync([executable, "-version"], { stdout: "pipe", stderr: "pipe" });
+    /*
+     * The probe is bounded. `java -version` is normally instantaneous, but a hung JVM, a stale NFS
+     * mount or a wrapper script that waits forever would otherwise block the *entire* panel: this
+     * call is synchronous and sits on the event loop (it used to freeze HTTP, WebSocket and the
+     * console with no timeout at all). Five seconds is plenty for a real JVM.
+     */
+    const result = Bun.spawnSync([executable, "-version"], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
     const text = `${result.stdout.toString()}${result.stderr.toString()}`;
-    ok = result.exitCode === 0 && /version\s+"?\d/.test(text);
+    timedOut = result.exitCode === null;
+    ok = !timedOut && result.exitCode === 0 && /version\s+"?\d/.test(text);
+    if (timedOut) {
+      console.warn(`[rslmc] ${executable} -version did not finish within 5 s — treating this runtime as unusable`);
+    }
   } catch {
     ok = false;
   }
-  runtimeHealth.set(path, ok);
+  // A timeout is a transient symptom, not a property of the runtime: do not cache it, so a slow
+  // first run does not condemn a perfectly good JDK for the lifetime of the process.
+  if (!timedOut) runtimeHealth.set(path, ok);
   return ok;
 }
 
