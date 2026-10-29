@@ -1,17 +1,22 @@
 name: Docs
 
-# Serves the screenshot gallery from docs/ on GitHub Pages, so the README images can also be
-# browsed as a page. Optional — delete this file if you do not want Pages enabled.
+# Optional: publishes the screenshot gallery in docs/ to GitHub Pages.
+#
+# It is manual on purpose — a new repository has Pages switched off, and a deploy job that fails
+# because of a setting would paint the repo red for no reason. To use it:
+#   1. Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   2. Actions → Docs → Run workflow
 on:
-  push:
-    branches: [main]
-    paths: ["docs/**", ".github/workflows/pages-docs.yml"]
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
