@@ -66,12 +66,12 @@ showing a dead button. Every metric, console line and player list comes from the
 <td><img src="docs/screenshots/dashboard-rose.png" alt="Rose theme dashboard"><br><sub><b>Rose</b> — the theme only changes the chrome, never the meaning of a status.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/sso-admin.png" alt="Single sign-on settings"><br><sub><b>Administration → Sign-in</b> — paste credentials, copy the exact redirect URI, flip the switch.</sub></td>
-<td><img src="docs/screenshots/users.png" alt="Users administration"><br><sub><b>Users</b> — roles, linked providers, avatars, server allocation.</sub></td>
+<td><img src="docs/screenshots/sso-admin.png" alt="Single sign-on settings"><br><sub><b>Administration → Sign-in</b> — paste credentials, copy the exact redirect URI, flip the switch (<i>Midnight</i>).</sub></td>
+<td><img src="docs/screenshots/users.png" alt="Users administration"><br><sub><b>Users</b> — roles, linked providers, avatars, server allocation (<i>Slate</i>).</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/profile-avatar.png" alt="Profile picture upload"><br><sub><b>My Profile</b> — drag a file onto the circle, or pick one.</sub></td>
-<td><img src="docs/screenshots/security-headers.png" alt="Console under a strict CSP"><br><sub><b>Live console</b> under a strict CSP (<code>script-src 'self'</code>) — no violations.</sub></td>
+<td><img src="docs/screenshots/profile-avatar.png" alt="Profile picture upload"><br><sub><b>My Profile</b> — drag a file onto the circle, or pick one; the theme picker is right above (<i>Violet</i>).</sub></td>
+<td><img src="docs/screenshots/security-headers.png" alt="Console under a strict CSP"><br><sub><b>Live console</b> under a strict CSP (<code>script-src 'self'</code>) — zero violations recorded (<i>Ocean</i>).</sub></td>
 </tr>
 </table>
 
@@ -110,22 +110,140 @@ One layout, twelve palettes. A theme changes the chrome and nothing else — a g
 
 ## Quick start
 
+Three commands to a running panel, then a short tour of what to click.
+
+### Running RSLMC
+
+#### 1. Requirements
+
+| | |
+|---|---|
+| **Bun** | 1.2 or newer (`curl -fsSL https://bun.sh/install \| bash`, or `powershell -c "irm bun.sh/install.ps1 \| iex"` on Windows) |
+| **Java** | *nothing to install* — RSLMC downloads Eclipse Temurin 8–25 itself into its data folder |
+| **Disk** | ~200 MB for the panel + ~150 MB per Java runtime you install + your worlds |
+| **OS** | Linux, Windows, macOS. No `unix shell` utilities are required, so the Windows path is real |
+
+#### 2. Start it
+
 ```bash
-bun install
-cp .env.example .env          # optional, defaults are fine for local use
-bun src/index.ts              # builds the frontend, migrates the DB, starts the panel
+bun install                  # dependencies (React, TypeScript, SQLite driver — all bundled)
+cp .env.example .env         # optional — every default works without it
+bun run start                # builds the frontend, migrates the database, starts the panel
+# → http://localhost:3000
 ```
 
-Open <http://localhost:3000>. On a fresh installation you are greeted with the setup screen and a
-bootstrap administrator:
+On Windows (PowerShell) the same three commands work. For development use `bun run dev`
+(restarts the backend on change; the frontend is rebuilt on each boot).
+
+First boot creates the data folder, the SQLite schema and a bootstrap administrator:
 
 | Username | Password   |
 | -------- | ---------- |
 | `admin`  | `admin123` |
 
-RSLMC immediately raises a **security notice** (dashboard banner + notification) telling you to
-change that password; the account keeps `mustChangePassword` until you do. The panel never hides
-this state and `System → Security` reports it.
+The panel immediately warns you — banner, notification and a blocking-looking notice on
+*My Profile* — and keeps `mustChangePassword` set until you change it; *Administration → System →
+Security* reports the same state, so it cannot quietly go stale. Nothing else is pre-seeded: no fake
+servers, no fake metrics, no demo data.
+
+#### 3. Make it yours before exposing it
+
+```bash
+RSLMC_MODE=production \
+RSLMC_SECRET="$(openssl rand -hex 32)" \
+RSLMC_PORT=3000 \
+bun run start
+```
+
+* `RSLMC_MODE=production` turns on secure cookies and the minified frontend build. Over plain HTTP
+  (for example `http://<ip>:19519`) keep `development`, because a `Secure` cookie would never be
+  sent — RSLMC detects this and says so instead of locking you out.
+* `RSLMC_SECRET` (≥32 chars) is **required** in production.
+* Behind a reverse proxy set `RSLMC_TRUST_PROXY=true` so rate limits and audit entries see the real IP.
+* Data lives in one folder (`/opt/rslmc`, `%ProgramData%\RSLMC`, `~/Library/Application Support/RSLMC`,
+  or `RSLMC_DATA_DIR`). Back it up by zipping that folder; move the install by copying it.
+
+**Keep it running after logout** — any supervisor works, because the panel is one process:
+
+```ini
+# Linux: /etc/systemd/system/rslmc.service
+[Unit]
+Description=RSLMC panel
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/rslmc-panel
+ExecStart=/root/.bun/bin/bun run start
+Environment=RSLMC_MODE=production
+Environment=RSLMC_SECRET=<32+ random chars>
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`systemctl enable --now rslmc`, then use *Administration → About → Restart RSLMC* for updates — it
+restarts the panel process itself and leaves running Minecraft servers untouched. (One honesty note:
+if you run it under a supervisor, restart it through that supervisor if you ever change the unit
+file, since the relauncher starts the process outside systemd's control.)
+
+#### 4. Troubleshooting the first run
+
+| Symptom | Cause and fix |
+|---|---|
+| `EADDRINUSE` | the port is taken — `RSLMC_PORT=3001 bun run start` |
+| *"RSLMC is rebuilding the panel UI"* 503 | `public/dist` was deleted or the build failed; the next request rebuilds it, and the message says which error stopped it |
+| Data folder is not writable | the banner names the folder and the reason; set `RSLMC_DATA_DIR` to somewhere you can write |
+| Windows: `%ProgramData%` refused | run once as administrator, or let the panel fall back to `%LOCALAPPDATA%\RSLMC` |
+| A server says *"…requested, only … MB free"* | real memory guard, not a bug: lower the server's allocation |
+
+---
+
+### Your first 15 minutes (what to click)
+
+Everything below is an actual page in the panel — no feature is a mock button.
+
+1. **Sign in** at `/login` with `admin` / `admin123`, then go to **My Profile** and change the
+   password. Pick a **theme** on the same page while you are there: twelve palettes, saved to your
+   account, applied instantly. A theme never changes the meaning of a status colour.
+2. **New server** (*Servers → New server*). The wizard asks for a name, then the software
+   (Paper, Purpur, Fabric, Forge, NeoForge, Quilt, Vanilla, Spigot, Velocity, BungeeCord, Waterfall),
+   the Minecraft version and build — these lists come live from the upstream APIs — then memory,
+   CPU share, port and the EULA. RSLMC downloads the jar, checks the upstream checksum when one is
+   published, and installs a Temurin JDK that matches the version's requirement.
+3. **Start** it. The first start writes `server.properties`, accepts the EULA you agreed to, and
+   streams the real console. If Java is missing or the port is busy, the log says exactly that.
+4. **Console** — type `list`, `say hi`, `op <player>`, `stop`. History is here and survives a panel
+   restart. **Files** and **Properties** edit the real directory and the real `server.properties`
+   (allocation-owned keys are locked so you cannot make the server undiscoverable).
+5. **Players** — online list, whitelist, ops, bans, plus an inspector with inventory, ender chest and
+   stats read from the world files.
+6. **Plugins** — search Modrinth, pick a version, install; the jar lands in `plugins/` (or `mods/`).
+   **Worlds** lists, switches, clones and deletes worlds with the server stopped.
+7. **Backups** — create a tar.gz snapshot, then restore it later with verified progress. **Schedules**
+   run cron-style tasks (restart at 04:00, backup hourly) for real.
+8. **Administration → Users / Roles** — create accounts, assign roles, and allocate servers. A
+   **User** can start, stop, kill and use the console of the servers you allocate; it cannot create
+   servers, touch another account or open the admin area.
+9. **Administration → Sign-in** — optional Discord and Google (via Firebase) login. Paste the
+   credentials, copy the redirect URI the page shows you into the provider's console, flip the switch.
+10. **Administration → Java Runtimes** — pre-install Temurin 8/11/17/21/25 so a server never waits at
+    first start. **Audit Log** records who did what with secrets redacted. **About** shows the build,
+    the update channel and the update controls.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/profile-avatar.png" alt="My Profile — themes and profile picture"><br><sub><b>Step 1 · My Profile</b> — twelve themes, chosen here, plus the profile picture (Violet).</sub></td>
+<td width="50%"><img src="docs/screenshots/users.png" alt="Administration → Users"><br><sub><b>Step 8 · Users</b> — roles, status and per-account server allocation (Slate).</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/sso-admin.png" alt="Administration → Sign-in"><br><sub><b>Step 9 · Sign-in</b> — paste credentials, copy the exact redirect URI, flip the switch (Midnight).</sub></td>
+<td><img src="docs/screenshots/security-headers.png" alt="Live console under a strict CSP"><br><sub><b>Step 4 · Console</b> — real stdout under <code>script-src 'self'</code>; zero CSP violations recorded (Ocean).</sub></td>
+</tr>
+</table>
+
+Deeper walkthroughs: [updating](docs/updating.md) · [the sidebar map and permissions](#panel-features) ·
+[honest limitations](#known-limitations-stated-not-hidden).
 
 ### Environment
 
