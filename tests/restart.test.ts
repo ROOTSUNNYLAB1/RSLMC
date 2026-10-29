@@ -131,7 +131,8 @@ describe("panel restart", () => {
     const about = await fetch(`${BASE}/api/panel/about`, { headers: { cookie } });
     expect(about.status).toBe(200);
     const payload = await about.json() as any;
-    expect(payload.version).toMatch(/^\d{4}\.\d{2}\.\d{2}$/);
+    // CalVer: YYYY.MM.DD, plus ".N" for a second release on the same day.
+    expect(payload.version).toMatch(/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/);
     expect(payload.build.pid).toBe(newestPid);
     expect(payload.update.canManage).toBe(true);
     expect(payload.repository.slug).toContain("/");

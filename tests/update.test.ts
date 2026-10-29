@@ -198,7 +198,11 @@ describe("update state", () => {
     const result = await service.checkForUpdates({ notifyAdmins: true });
     expect(result.latest?.version).toBe(TARGET_VERSION);
     expect(result.updateAvailable).toBe(true);
-    expect(result.currentVersion).toBe("2026.10.29");
+    // The version comes from package.json; hardcoding it here made the suite fail on every
+    // release day. Compare with what the panel itself reports.
+    const { APP_VERSION } = await import("../src/shared/config");
+    expect(result.currentVersion).toBe(APP_VERSION);
+    expect(result.currentIsCalVer).toBe(true);
     expect(result.latest?.verified).toBe(true);
     expect(result.lastCheckError).toBeNull();
     expect(result.latest?.releaseAge).toBeTruthy();
