@@ -279,6 +279,36 @@ export function readUsage(serverId: number): CgroupUsage {
   };
 }
 
+/**
+ * Decides which memory number to trust.
+ *
+ * A cgroup is the better source when it is really accounting for the process: it excludes pages the
+ * JVM shares with everything else and it is what `memory.max` is enforced against. But a container
+ * can hand out a cgroupfs where the memory controller is only half-delegated: the files exist, the
+ * limits look right, and `memory.current` still reads a few hundred kilobytes for a process using a
+ * gigabyte. Reporting that number would be a fake metric, so the process RSS wins whenever the two
+ * disagree by more than 4× — and the caller is told which one it got, so the UI can say so too.
+ */
+export function resolveMemoryUsage(
+  cgroupBytes: number | null | undefined,
+  rssBytes: number | null | undefined,
+): { bytes: number; source: "cgroup" | "/proc" | "none"; cgroupTrusted: boolean } {
+  const cg = typeof cgroupBytes === "number" && Number.isFinite(cgroupBytes) && cgroupBytes >= 0 ? cgroupBytes : null;
+  const rss = typeof rssBytes === "number" && Number.isFinite(rssBytes) && rssBytes > 0 ? rssBytes : null;
+  if (cg === null && rss === null) return { bytes: 0, source: "none", cgroupTrusted: false };
+  if (cg === null) return { bytes: rss!, source: "/proc", cgroupTrusted: false };
+  // A cgroup reading of exactly zero with no process sample is not "0 bytes of memory": it means
+  // there is nothing to measure yet.
+  if (cg === 0 && rss === null) return { bytes: 0, source: "none", cgroupTrusted: false };
+  if (rss === null) return { bytes: cg, source: "cgroup", cgroupTrusted: true };
+  // A cgroup working set can legitimately be smaller than RSS (shared libraries, page cache), but
+  // never by an order of magnitude for the process it is supposed to contain.
+  const plausible = cg * 4 >= rss;
+  return plausible
+    ? { bytes: cg, source: "cgroup", cgroupTrusted: true }
+    : { bytes: rss, source: "/proc", cgroupTrusted: false };
+}
+
 export function resetCapabilityCache(): void {
   cached = null;
 }

@@ -9,7 +9,7 @@ import { recordActivity } from "../services/audit";
 import { downloadFile, writeFileAtomic } from "../services/download";
 import { installServerSoftware, softwareDefinition } from "../minecraft/providers";
 import { ensureRuntime, resolveExecutable, runtimeInfo, runtimeIsUsable } from "../java/manager";
-import { applyLimits, attachProcess, detectCgroups, killCgroup, readUsage, removeCgroup } from "../resources/cgroups";
+import { applyLimits, attachProcess, detectCgroups, killCgroup, readUsage, removeCgroup, resolveMemoryUsage } from "../resources/cgroups";
 import { sampleProcess, peekProcess, resetProcessSamples } from "../resources/process-stats";
 import { directorySizeSync } from "../resources/host";
 import { freemem } from "node:os";
@@ -957,6 +957,37 @@ export function sendCommand(serverId: number, command: string, actor = "system")
 /* Metrics                                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * When the host hands out a cgroup that does not charge the server's pages, the panel reports the
+ * process RSS instead — and says so once per start, in the console and in the server's enforcement
+ * note, so nobody reads "kernel limits applied" and expects a number that came from the kernel.
+ */
+const cgroupAccountingWarned = new Set<number>();
+
+function noteCgroupAccounting(
+  serverId: number,
+  memory: { source: "cgroup" | "/proc" | "none"; cgroupTrusted: boolean },
+  cgroupBytes: number | null,
+): void {
+  if (memory.source !== "/proc" || cgroupBytes === null) {
+    cgroupAccountingWarned.delete(serverId);
+    return;
+  }
+  if (cgroupAccountingWarned.has(serverId)) return;
+  cgroupAccountingWarned.add(serverId);
+  const entry = managed.get(serverId);
+  if (entry) {
+    entry.state.enforcementMessage =
+      "Memory/CPU limits are cgroup settings, but this host's cgroup is not charging the server's "
+      + "memory — usage is read from the process instead.";
+    systemLine(serverId,
+      "This host's cgroup reports far less memory than the JVM holds (a partially delegated "
+      + "memory controller in a container). Memory usage is read from /proc instead; the limits "
+      + "themselves are still configured.",
+    );
+  }
+}
+
 function startMetrics(serverId: number, entry: ManagedProcess): void {
   stopMetrics(serverId);
   entry.state.console.push({ ts: Date.now(), stream: "system", text: `Metric sampling started (${METRIC_INTERVAL_MS / 1000}s interval).` });
@@ -977,8 +1008,11 @@ async function sampleMetrics(serverId: number, entry: ManagedProcess): Promise<v
 
   const snapshot = sampleProcess(entry.state.pid, null);
   const cgroup = process.platform === "linux" ? readUsage(serverId) : null;
-  const cgMemory = cgroup?.memoryBytes ?? null;
-  const memBytes = cgMemory ?? snapshot.rssBytes ?? 0;
+  // cgroup when it is genuinely accounting for the process, /proc otherwise — never a number the
+  // host cannot back up (see resolveMemoryUsage).
+  const memory = resolveMemoryUsage(cgroup?.memoryBytes, snapshot.rssBytes);
+  const memBytes = memory.bytes;
+  noteCgroupAccounting(serverId, memory, cgroup?.memoryBytes ?? null);
   const cpuPercent = snapshot.cpuPercent ?? 0;
   entry.lastCpu = cpuPercent;
 
@@ -1026,8 +1060,10 @@ export function currentMetrics(serverId: number): ServerMetrics {
     // A stopped server has no CPU usage; keeping the last sample would show a dead process at 99%.
     cpuPercent: entry.state.pid ? Number(entry.lastCpu.toFixed(2)) : 0,
     cpuSource: peek ? peek.source : "stopped",
-    memBytes: entry.state.pid ? (cgroup?.memoryBytes ?? peek?.rssBytes ?? 0) : 0,
-    memCacheBytes: entry.state.pid ? (cgroup?.memoryCacheBytes ?? 0) : 0,
+    memBytes: entry.state.pid ? resolveMemoryUsage(cgroup?.memoryBytes, peek?.rssBytes).bytes : 0,
+    memCacheBytes: entry.state.pid && resolveMemoryUsage(cgroup?.memoryBytes, peek?.rssBytes).cgroupTrusted
+      ? (cgroup?.memoryCacheBytes ?? 0)
+      : 0,
     diskBytes: entry.diskBytes || directorySizeSync(serverDirFor(server.uuid)),
     players: entry.state.players.size,
     netRxBytes: 0,

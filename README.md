@@ -77,7 +77,11 @@ showing a dead button. Every metric, console line and player list comes from the
 
 ### The same panel in twelve themes
 
-One layout, twelve palettes. A theme changes the chrome and nothing else — a green RUNNING badge stays green in every one of them.
+One layout, twelve palettes — the same pages, each shot with a different theme **selected on the
+account** (not injected into the page), so the chrome, the sidebar, the buttons and the theme picker
+all agree. A theme changes the chrome and nothing else: a green RUNNING badge stays green in every
+one of them. `Charcoal` is the default; `Slate` and `Graphite` are the low-chroma greys, so they shift
+the temperature rather than the hue.
 
 <table>
 <tr>
@@ -623,6 +627,13 @@ account cannot read are treated as *unknown* (empty `Get-Process` values would o
 value. Linux is verified live in this build (paper start-up measured at 98.7–99.7 %, an idle Velocity
 proxy at 0.3–0.7 %); the Windows path is implemented and reviewed but has to be confirmed on a
 Windows host.
+
+**Memory is measured, never assumed.** Usage comes from the server's cgroup when that cgroup is
+actually charging the process, and from `/proc/<pid>/statm` when it is not. A container can hand out a
+cgroupfs whose files look right while `memory.current` reads a few hundred kilobytes for a JVM holding
+a gigabyte; RSLMC detects that (a >4× disagreement between the two) and reports the process number
+instead, says so once in the server's console, and keeps the limits as configured. A fake metric is
+worse than a smaller one — `tests/memory-source.test.ts` pins the behaviour down.
 
 ### Java runtimes
 
