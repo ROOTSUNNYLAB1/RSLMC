@@ -5,11 +5,11 @@ panel was attacked over HTTP/WebSocket by an automated harness (`tests/security/
 Everything below was executed against a real instance, not inferred.
 
 ```
-bun run tests/security/pentest.ts          # 101 checks, exit code 1 if any fail
+bun run tests/security/pentest.ts          # 114 checks, exit code 1 if any fail
 bun run tests/security/pentest.ts --json   # machine readable, also written to last-run.json
 ```
 
-Last run: **101 / 101 checks pass, 0 fail** (plus `bun test`: 106 pass / 640 assertions, `tsc --noEmit` clean).
+Last run: **114 / 114 checks pass, 0 fail** (plus `bun test`: 21 files, 205 tests, 0 fail; `tsc --noEmit` clean).
 
 ---
 
@@ -173,8 +173,8 @@ bands, background lightness) and that every accent clears 4:1 contrast against i
 ```bash
 cd rslmc
 bun install
-bun test                              # 106 unit/integration tests (11 files)
-bun run tests/security/pentest.ts     # 101 adversarial checks against a throwaway instance
+bun test                              # 205 unit/integration tests (21 files)
+bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
 ```
 
 The harness creates its own data directory in `$TMPDIR`, boots the panel on port 3941, seeds two

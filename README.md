@@ -759,11 +759,11 @@ The panel is audited by an executable harness, not by a checklist: `tests/securi
 throwaway instance and attacks it over HTTP and WebSocket — IDOR, privilege escalation, path traversal
 (with a real symlink escape), zip-slip, SQL injection, prototype pollution, SSRF, command injection,
 CSRF, session fixation, username enumeration, secret disclosure, security headers and resource limits.
-**77 checks, all passing.** Full write-up, including the seven real defects that round found and how each
+**114 checks, all passing.** Full write-up, including the seven real defects that round found and how each
 was fixed, is in [`SECURITY.md`](SECURITY.md).
 
 ```bash
-bun run tests/security/pentest.ts          # 77 checks, non-zero exit on failure
+bun run tests/security/pentest.ts          # 114 checks, non-zero exit on failure
 ```
 
 Hardening that is on by default:

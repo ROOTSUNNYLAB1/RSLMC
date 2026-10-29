@@ -18,7 +18,7 @@ The `main` branch is the supported version. Fixes land there first.
 
 ## What RSLMC already defends against
 
-`bun run tests/security/pentest.ts` boots a throwaway panel and attacks it — 101 checks covering
+`bun run tests/security/pentest.ts` boots a throwaway panel and attacks it — 114 checks covering
 authentication, IDOR, privilege escalation, CSRF, injection, resource exhaustion, header hygiene,
 the OAuth callback, uploads and per-account settings. Run it before reporting; if a check is missing
 for the class of bug you found, that is a valuable report on its own.
