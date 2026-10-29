@@ -240,6 +240,13 @@ describe("update state", () => {
 describe("installation", () => {
   test("installs the release into the target folder and keeps the data", async () => {
     const installer = await import("../src/update/installer");
+    const { PATHS: pathsBefore } = await import("../src/shared/config");
+    const rollbackDir = join(pathsBefore.backups, "panel");
+    // Count what is already there (0 when the folder does not exist yet), so the assertion below is a
+    // delta and does not care how many archives earlier runs left behind.
+    const rollbackArchivesBeforeInstall = existsSync(rollbackDir)
+      ? [...new Bun.Glob("code-*.tar.gz").scanSync(rollbackDir)].length
+      : 0;
     const started = await installer.startInstall({ actor: "admin", actorId: 1, targetRoot: APP_ROOT });
     expect(started.targetVersion).toBe(TARGET_VERSION);
 
@@ -275,10 +282,10 @@ describe("installation", () => {
     // writes it (`PATHS.backups`, resolved once by src/shared/config.ts) instead of recomputing the
     // path by hand: several test files share one process, so whichever file imported config first
     // decides the data root — and a hand-built path would then point at a folder that never exists.
-    const { PATHS } = await import("../src/shared/config");
-    const backupsDir = join(PATHS.backups, "panel");
+    const backupsDir = rollbackDir;
     const backups = [...new Bun.Glob("code-*.tar.gz").scanSync(backupsDir)];
-    expect(backups.length).toBe(1);
+    // +1 compared with before the install: the folder may already hold other runs' archives.
+    expect(backups.length).toBe(rollbackArchivesBeforeInstall + 1);
     // A real gzip stream, not an empty file: 1f 8b is the magic every tar.gz starts with.
     const rollbackBytes = readFileSync(join(backupsDir, backups[0]!));
     expect([rollbackBytes[0], rollbackBytes[1]]).toEqual([0x1f, 0x8b]);

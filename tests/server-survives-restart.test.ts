@@ -17,7 +17,9 @@ import { Database } from "bun:sqlite";
 
 const DATA_DIR = mkdtempSync(join(tmpdir(), "rslmc-survive-"));
 const ROOT = join(import.meta.dir, "..");
-const PORT = 3991;
+// A fixed port made this suite collide with a panel left behind by an aborted run (the relauncher
+// it tests survives the test process). Pick a free one instead.
+const PORT = freePort();
 const BASE = `http://127.0.0.1:${PORT}`;
 const UUID = "11111111-2222-3333-4444-555555555555";
 
@@ -142,6 +144,13 @@ for await (const chunk of Bun.stdin.stream()) {
 });
 
 afterAll(() => {
+  // The relaunched panel is a detached process: kill whatever still listens on the port as well.
+  try {
+    const probe = Bun.spawnSync(["sh", "-c", `ss -ltnp 2>/dev/null | grep ':${PORT}' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u`]);
+    for (const pid of probe.stdout.toString().split("\n").map((v) => Number(v.trim())).filter(Boolean)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+  } catch { /* no ss on this host */ }
   for (const pid of [panelPid, newestPid]) {
     if (pid) { try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ } }
   }

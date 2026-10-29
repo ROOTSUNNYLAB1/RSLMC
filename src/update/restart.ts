@@ -258,6 +258,35 @@ export function completeRestartOnBoot(serversRunning: number): { restarted: bool
   return { restarted: true, bootMs, serversKept };
 }
 
+/**
+ * Decides what a restart record means for the process that is reading it.
+ *
+ * Two independent facts say a relaunch is over: the phase reached "completed", or the process the
+ * relauncher was told to start is *this* process. The second one matters because the relauncher writes
+ * its last status a couple of seconds after the new panel boots, and it can land after the boot has
+ * already recorded the completion — which used to leave the UI claiming "a restart is in progress"
+ * (and refusing new restarts) until the state file expired.
+ *
+ * Pure on purpose: the race it describes is impossible to reproduce on demand, so it is pinned down by
+ * tests that only need a state object and a pid.
+ */
+export function resolveRestartState(
+  state: RestartState | null,
+  currentPid: number,
+): { current: RestartState | null; inProgress: boolean; repaired: boolean } {
+  if (!state) return { current: null, inProgress: false, repaired: false };
+  const landed = state.newPid === currentPid;
+  const unfinished = state.phase !== "completed" && state.phase !== "failed";
+  if (landed && unfinished) {
+    return {
+      current: { ...state, phase: "completed", completedAt: state.completedAt ?? Date.now() },
+      inProgress: false,
+      repaired: true,
+    };
+  }
+  return { current: state, inProgress: !landed && unfinished, repaired: false };
+}
+
 export interface RestartSnapshot {
   current: RestartState | null;
   inProgress: boolean;
@@ -289,20 +318,15 @@ export function restartSnapshot(): RestartSnapshot {
     fromVersion: row.from_version ?? "",
     toVersion: row.to_version ?? "",
   }));
-  // Two independent facts say a relaunch is over: the phase reached "completed", or the process the
-  // relauncher was told to start is *this* process. The second one matters because the relauncher
-  // writes its last status a couple of seconds after the new panel boots, and it can land after the
-  // boot has already recorded the completion — which used to leave the UI claiming "a restart is in
-  // progress" (and refusing new restarts) until the state file expired.
-  const landed = Boolean(current && current.newPid === process.pid);
-  if (current && landed && (current.phase === "relaunching" || current.phase === "stopping")) {
-    const repaired: RestartState = { ...current, phase: "completed", completedAt: current.completedAt ?? Date.now() };
-    try { writeRestartState(repaired); } catch { /* read-only data folder: the UI is still correct below */ }
-    current = repaired;
+  const resolved = resolveRestartState(current, process.pid);
+  if (resolved.repaired && resolved.current) {
+    // Write the repair back so a reload agrees; a read-only data folder still gets the right answer.
+    try { writeRestartState(resolved.current); } catch { /* ignore */ }
+    current = resolved.current;
   }
   return {
     current: current && current.pid !== process.pid ? current : null,
-    inProgress: Boolean(current && !landed && current.phase !== "completed" && current.phase !== "failed"),
+    inProgress: resolved.inProgress,
     history,
     pid: process.pid,
     startedAt: BOOTED_AT,
