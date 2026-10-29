@@ -555,7 +555,18 @@ export function AboutPage() {
       >
         <div className="about-repo">
           <div className="about-repo-main">
-            <p className="about-repo-desc">{data.repository.info?.description ?? "A self-hosted Minecraft server panel that shows you the truth — real processes, real metrics, no black boxes."}</p>
+            {/* A factual description, not a slogan: what the panel is, what it does, and where its
+                state lives. The GitHub blurb is deliberately not echoed here — it is marketing copy
+                that goes stale, and this card is supposed to be the operator's reference. */}
+            <p className="about-repo-desc">
+              Minecraft server management panel, version {data.version}. It creates servers, downloads the
+              server software and a matching Temurin JDK, runs each server as its own OS process, and puts the
+              console, files, players, worlds, backups and schedules in one browser tab.
+            </p>
+            <p className="about-note muted">
+              One process · SQLite · every file under {data.paths.data} · MIT licence · not affiliated with
+              Mojang, Microsoft or Pterodactyl.
+            </p>
             <div className="about-repo-stats">
               <span><Star size={12} /> {data.repository.info?.stars ?? "—"} stars</span>
               <span><GitBranch size={12} /> {data.repository.info?.forks ?? "—"} forks</span>

@@ -2,15 +2,17 @@
 
 <img src="docs/banner.svg" alt="RSLMC — Minecraft server management panel" width="100%">
 
-**A self-hosted Minecraft server panel that shows you the truth.**
-Real OS processes · real metrics · real downloads · honest about what it cannot do.
+**Self-hosted Minecraft server management panel.**
+Creates servers, installs the server software and a matching Java runtime, runs each one as a real OS
+process, and puts the console, files, players, worlds, backups and schedules in one browser tab.
+Bun + TypeScript · React · SQLite · CalVer self-updates · Windows, Linux and macOS.
 
 [![Bun](https://img.shields.io/badge/Bun-1.2%2B-000000?logo=bun&logoColor=3ecf72)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)](tsconfig.json)
 [![React](https://img.shields.io/badge/React-19-149eca?logo=react&logoColor=white)](frontend)
 [![SQLite](https://img.shields.io/badge/SQLite-bun%3Asqlite-003b57?logo=sqlite&logoColor=white)](migrations)
-[![Tests](https://img.shields.io/badge/tests-106%20passing-3ecf72)](#testing)
-[![Security](https://img.shields.io/badge/adversarial%20checks-101%20passing-3ecf72)](SECURITY.md)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-3ecf72)](#testing)
+[![Security](https://img.shields.io/badge/adversarial%20checks-114%20passing-3ecf72)](SECURITY.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-555)](#)
 
 </div>
