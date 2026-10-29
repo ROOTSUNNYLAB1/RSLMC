@@ -387,7 +387,19 @@ run() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
 if [[ $ROOT -eq 0 && $OPT_USER_MODE -eq 0 && $OPT_UNINSTALL -eq 0 ]]; then
   if [[ -t 0 || -r /dev/tty ]] && have sudo; then
     warn "Installing system-wide needs root — re-running with sudo."
-    exec sudo -E bash "$0" "$@"
+    # "$0" is /dev/fd/63 when this script came from `bash <(curl …)`; that descriptor does not exist
+    # in the new process, so hand sudo a real copy of ourselves and let the child clean it up.
+    SELF_COPY="$(mktemp "${TMPDIR:-/tmp}/rslmc-reexec.XXXXXX.sh" 2>/dev/null || echo "")"
+    if [[ -z "$SELF_COPY" ]] || ! cat "$0" >"$SELF_COPY" 2>/dev/null; then
+      err "Could not re-run under sudo from this shell."
+      say "Download it first, then run it:"
+      say "  curl -sSL https://raw.githubusercontent.com/${REPO_SLUG}/main/install.sh -o rslmc-install.sh"
+      say "  sudo bash rslmc-install.sh"
+      exit 1
+    fi
+    chmod 0755 "$SELF_COPY"
+    export RSLMC_SELF_COPY="$SELF_COPY"
+    exec sudo -E bash "$SELF_COPY" "$@"
   else
     warn "Not root and sudo is unavailable — continuing as a user-mode install under \$HOME."
     OPT_USER_MODE=1
@@ -790,7 +802,11 @@ LOG_FILE="$WORK/install.log"
 : >"$LOG_FILE"
 trap on_error ERR
 
-cleanup() { rm -rf "${WORK:-}"; }
+cleanup() {
+  rm -rf "${WORK:-}"
+  # Remove the temporary copy made when this run re-executed itself under sudo.
+  if [[ -n "${RSLMC_SELF_COPY:-}" && -f "${RSLMC_SELF_COPY}" ]]; then rm -f "$RSLMC_SELF_COPY"; fi
+}
 trap cleanup EXIT
 
 # ── 1. bun ──────────────────────────────────────────────────────────────────
