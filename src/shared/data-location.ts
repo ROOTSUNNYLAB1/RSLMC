@@ -1,5 +1,5 @@
 import { accessSync, cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync, unlinkSync, readdirSync, constants } from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { posix, win32 } from "node:path";
 import { homedir } from "node:os";
 
@@ -112,10 +112,17 @@ export function resolveDataLocation(options: ResolveOptions): DataLocation {
   const env = options.env ?? (process.env as LocationEnv);
   const probe = options.probe ?? probeWritable;
   const considered: string[] = [];
+  /*
+   * Path arithmetic follows the *target* platform, not the host running the code: the same function
+   * resolves a Windows layout when asked about win32 and a POSIX layout when asked about linux (the
+   * test suite relies on this, and so does a panel started with a mocked platform). For a real run
+   * `platform` is process.platform, so this is simply the normal behaviour.
+   */
+  const path = platform === "win32" ? win32 : posix;
 
   const explicit = env.RSLMC_DATA_DIR?.trim();
   if (explicit) {
-    const dir = isAbsolute(explicit) ? normalize(explicit) : resolve(options.rootDir, explicit);
+    const dir = path.isAbsolute(explicit) ? path.normalize(explicit) : path.resolve(options.rootDir, explicit);
     considered.push(dir);
     // An explicit choice is honoured even if it looks unwritable: the operator asked for it, and
     // ensureDirectories()/Bun will surface the real error instead of silently moving their data.
@@ -151,7 +158,7 @@ export function resolveDataLocation(options: ResolveOptions): DataLocation {
     failures.push(failure);
   }
 
-  const fallback = resolve(options.rootDir, "runtime");
+  const fallback = path.resolve(options.rootDir, "runtime");
   considered.push(fallback);
   const fallbackFailure = probe(fallback);
   const reason = failures.join("; ") || "no platform folder available";

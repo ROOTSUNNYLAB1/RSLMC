@@ -55,6 +55,9 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - name: Data directory logic and paths
-        run: bun test tests/data-location.test.ts
+      - name: Typecheck
+        run: bun run typecheck
+        shell: bash
+      - name: Platform-specific logic (data folder, JVM presets, versions)
+        run: bun test tests/data-location.test.ts tests/jvm-presets.test.ts tests/mc-version.test.ts
         shell: bash
