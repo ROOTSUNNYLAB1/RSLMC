@@ -14,7 +14,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { compareCalVer, parseCalVer, todayCalVer } from "../src/shared/calver";
 
-const ROOT = resolve(dirname(import.meta.dir), "..");
+// `import.meta.dir` is already <repo>/scripts, so the repo root is one level up from there.
+const ROOT = resolve(dirname(import.meta.dir), ".");
 const PKG = join(ROOT, "package.json");
 const dryRun = process.argv.includes("--dry-run");
 
