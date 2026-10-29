@@ -267,10 +267,17 @@ describe("installation", () => {
     expect(readFileSync(join(APP_ROOT, "database", "rslmc.db"), "utf8")).toBe("precious-database-bytes");
     expect(readFileSync(join(APP_ROOT, ".env"), "utf8")).toContain("RSLMC_PORT=3000");
 
-    // The rollback copy exists and is a real archive.
-    const backupsDir = join(DATA_DIR, "backups", "panel");
+    // The rollback copy exists and is a real archive. Look for it where the installer actually
+    // writes it (`PATHS.backups`, resolved once by src/shared/config.ts) instead of recomputing the
+    // path by hand: several test files share one process, so whichever file imported config first
+    // decides the data root — and a hand-built path would then point at a folder that never exists.
+    const { PATHS } = await import("../src/shared/config");
+    const backupsDir = join(PATHS.backups, "panel");
     const backups = [...new Bun.Glob("code-*.tar.gz").scanSync(backupsDir)];
     expect(backups.length).toBe(1);
+    // A real gzip stream, not an empty file: 1f 8b is the magic every tar.gz starts with.
+    const rollbackBytes = readFileSync(join(backupsDir, backups[0]!));
+    expect([rollbackBytes[0], rollbackBytes[1]]).toEqual([0x1f, 0x8b]);
   }, 90_000);
 
   test("the installed version is recorded as pending a restart", async () => {
