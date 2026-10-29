@@ -1,6 +1,6 @@
 {
   "name": "rslmc",
-  "version": "2026.10.29.3",
+  "version": "2026.10.29.4",
   "private": true,
   "description": "RSLMC \u2014 Minecraft game server management panel",
   "module": "src/index.ts",
