@@ -379,31 +379,21 @@ fi
 
 ROOT=0
 if [[ "$(id -u)" -eq 0 ]]; then ROOT=1; fi
+
+# Privileged steps are escalated one command at a time instead of re-executing the whole script.
+# That matters because "$0" is /dev/fd/63 when this installer came from `bash <(curl …)` — it cannot
+# be re-run, and a fresh copy of it cannot be recovered either (the descriptor is already consumed).
 SUDO=""
-if [[ $ROOT -eq 1 ]]; then SUDO="sudo"; fi
+CAN_ROOT=$ROOT
+if [[ $ROOT -eq 0 ]] && have sudo; then
+  CAN_ROOT=1
+  SUDO="sudo"
+fi
 run() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
 
-# Re-exec under sudo when we need root and the caller has not asked for a user-mode install.
-if [[ $ROOT -eq 0 && $OPT_USER_MODE -eq 0 && $OPT_UNINSTALL -eq 0 ]]; then
-  if [[ -t 0 || -r /dev/tty ]] && have sudo; then
-    warn "Installing system-wide needs root — re-running with sudo."
-    # "$0" is /dev/fd/63 when this script came from `bash <(curl …)`; that descriptor does not exist
-    # in the new process, so hand sudo a real copy of ourselves and let the child clean it up.
-    SELF_COPY="$(mktemp "${TMPDIR:-/tmp}/rslmc-reexec.XXXXXX.sh" 2>/dev/null || echo "")"
-    if [[ -z "$SELF_COPY" ]] || ! cat "$0" >"$SELF_COPY" 2>/dev/null; then
-      err "Could not re-run under sudo from this shell."
-      say "Download it first, then run it:"
-      say "  curl -sSL https://raw.githubusercontent.com/${REPO_SLUG}/main/install.sh -o rslmc-install.sh"
-      say "  sudo bash rslmc-install.sh"
-      exit 1
-    fi
-    chmod 0755 "$SELF_COPY"
-    export RSLMC_SELF_COPY="$SELF_COPY"
-    exec sudo -E bash "$SELF_COPY" "$@"
-  else
-    warn "Not root and sudo is unavailable — continuing as a user-mode install under \$HOME."
-    OPT_USER_MODE=1
-  fi
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 0 ]]; then
+  warn "Not root and sudo is unavailable — continuing as a user-mode install under \$HOME."
+  OPT_USER_MODE=1
 fi
 
 for tool in curl tar; do
@@ -496,18 +486,22 @@ if [[ $OPT_UNINSTALL -eq 1 ]]; then
     warn "No service found — nothing to stop."
   fi
 
-  # The state file next to the code knows where this installation kept its data.
-  if [[ -f "${OPT_PATH:-/opt/rslmc}/.rslmc-install" ]]; then
+  # The state file next to the code knows where this installation kept its data and config.
+  UNINSTALL_PATH="${OPT_PATH:-/opt/rslmc}"
+  if [[ -f "${UNINSTALL_PATH}/.rslmc-install" ]]; then
     # shellcheck disable=SC1090
-    . "${OPT_PATH}/.rslmc-install"
+    . "${UNINSTALL_PATH}/.rslmc-install"
     OPT_DATA="${OPT_DATA:-${STATE_DATA_DIR:-}}"
+    OPT_PATH="$UNINSTALL_PATH"
+  else
+    OPT_PATH="$UNINSTALL_PATH"
   fi
 
   section "Removing the panel"
   if [[ -x "${OPT_PATH:-/opt/rslmc}/rslmc-ctl" && $OPT_USER_MODE -eq 1 ]]; then
     rm -rf "${OPT_PATH:?}"
     ok "Removed $OPT_PATH"
-  elif [[ $ROOT -eq 1 ]]; then
+  elif [[ $CAN_ROOT -eq 1 ]]; then
     run rm -f "/etc/systemd/system/${SERVICE}.service" /usr/local/bin/rslmc
     run rm -rf "${OPT_PATH:?}" "/etc/${SERVICE}"
     run systemctl daemon-reload 2>/dev/null || true
@@ -802,11 +796,7 @@ LOG_FILE="$WORK/install.log"
 : >"$LOG_FILE"
 trap on_error ERR
 
-cleanup() {
-  rm -rf "${WORK:-}"
-  # Remove the temporary copy made when this run re-executed itself under sudo.
-  if [[ -n "${RSLMC_SELF_COPY:-}" && -f "${RSLMC_SELF_COPY}" ]]; then rm -f "$RSLMC_SELF_COPY"; fi
-}
+cleanup() { rm -rf "${WORK:-}"; }
 trap cleanup EXIT
 
 # ── 1. bun ──────────────────────────────────────────────────────────────────
@@ -926,7 +916,7 @@ ok "Unpacked $(find "$SRC_DIR" -type f | wc -l | tr -d ' ') files"
 
 # ── 3. service user and folders ─────────────────────────────────────────────
 section "Preparing folders"
-if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
   if ! id -u "$RUN_USER" >/dev/null 2>&1; then
     if have useradd; then
       run useradd --system --create-home --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$RUN_USER" >/dev/null 2>&1 \
@@ -942,7 +932,7 @@ fi
 
 run mkdir -p "$INSTALL_PATH" "$DATA_DIR"
 run mkdir -p "$DATA_DIR/logs"
-if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
   run chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_PATH" "$DATA_DIR" 2>/dev/null || true
   run chmod 750 "$DATA_DIR"
 fi
@@ -973,8 +963,14 @@ if [[ -d "$INSTALL_PATH" && -n "$(ls -A "$INSTALL_PATH" 2>/dev/null)" ]]; then
   ok "Previous code kept at ${INSTALL_PATH}.previous (rollback if anything fails)"
 fi
 run mkdir -p "$INSTALL_PATH"
-( cd "$SRC_DIR" && tar -cf - . ) | ( cd "$INSTALL_PATH" && tar -xf - )
-if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then run chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_PATH" 2>/dev/null || true; fi
+if [[ -n "$SUDO" ]]; then
+  # The target belongs to the service account, so the copy has to run with the same privileges the
+  # folder was created with — otherwise a root-owned directory rejects an unprivileged extraction.
+  run tar -xzf "$WORK/$ARCHIVE" -C "$INSTALL_PATH" --strip-components=1
+else
+  ( cd "$SRC_DIR" && tar -cf - . ) | ( cd "$INSTALL_PATH" && tar -xf - )
+fi
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then run chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_PATH" 2>/dev/null || true; fi
 ok "Code in place"
 
 rollback() {
@@ -988,7 +984,7 @@ rollback() {
 # Both steps run as the account the panel will run as: if root did this, public/dist and the bun
 # cache would end up root-owned and the service would fail on its very first write.
 as_service_user() {
-  if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]] && id -u "$RUN_USER" >/dev/null 2>&1; then
+  if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]] && id -u "$RUN_USER" >/dev/null 2>&1; then
     sudo -u "$RUN_USER" -- env HOME="$DATA_DIR" BUN_INSTALL_CACHE_DIR="$WORK/bun-cache" \
       bash -c 'cd "$1" && shift && exec "$@"' _ "$INSTALL_PATH" "$@"
   else
@@ -1011,7 +1007,7 @@ else
 fi
 
 # Belt and braces: whatever is in the folder must belong to the account that runs the panel.
-if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
   run chown -R "$RUN_USER":"$RUN_USER" "$INSTALL_PATH" 2>/dev/null || true
 fi
 
@@ -1045,7 +1041,7 @@ RSLMC_SECRET=${SECRET}
 RSLMC_TRUST_PROXY=false
 ENVFILE
 run install -m 0600 "$ENV_TMP" "$ENV_FILE"
-if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then run chown "root:${RUN_USER}" "$ENV_FILE" 2>/dev/null || true; fi
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then run chown "root:${RUN_USER}" "$ENV_FILE" 2>/dev/null || true; fi
 ok "Environment file ${ENV_FILE} (mode 600)"
 
 cat >"$WORK/rslmc-state" <<STATEFILE
@@ -1179,9 +1175,9 @@ case "\${1:-status}" in
 esac
 CTLFILE
   chmod 0755 "$CTL_FILE"
-  [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]] && run chown "$RUN_USER":"$RUN_USER" "$CTL_FILE" 2>/dev/null || true
+  [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]] && run chown "$RUN_USER":"$RUN_USER" "$CTL_FILE" 2>/dev/null || true
   ok "Control script written: ${CTL_FILE} {start|stop|restart|status|logs}"
-  if [[ $OPT_USER_MODE -eq 0 && $ROOT -eq 1 ]]; then
+  if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
     printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$CTL_FILE" >"$WORK/rslmc-cli"
     run install -m 0755 "$WORK/rslmc-cli" /usr/local/bin/rslmc
     ok "Command installed: rslmc {start|stop|restart|status|logs}"
