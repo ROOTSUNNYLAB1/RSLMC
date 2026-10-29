@@ -69,6 +69,9 @@ interface RestartState {
   error?: string;
   fromVersion?: string;
   toVersion?: string;
+  completedAt?: number;
+  stoppedAt?: number;
+  serversKept?: number;
 }
 
 function readState(): RestartState | null {
@@ -81,7 +84,15 @@ function patchState(patch: Partial<RestartState>): void {
   if (!current) return;
   const tmp = `${STATE_PATH}.tmp`;
   try {
-    writeFileSync(tmp, JSON.stringify({ ...current, ...patch }, null, 2), { mode: 0o600 });
+    // The new panel marks the restart completed as soon as it boots, which can happen before the
+    // lines below run. Never downgrade that record back to "relaunching": the panel would then keep
+    // telling the operator a restart is in progress and refuse to start another one.
+    const next = { ...current, ...patch };
+    if (current.phase === "completed" && patch.phase && patch.phase !== "completed") {
+      next.phase = "completed";
+      next.completedAt = current.completedAt;
+    }
+    writeFileSync(tmp, JSON.stringify(next, null, 2), { mode: 0o600 });
     renameSync(tmp, STATE_PATH);
   } catch (error) {
     log(`could not update the restart record: ${error instanceof Error ? error.message : String(error)}`);
