@@ -32,9 +32,22 @@ export function jsonError(error: unknown): Response {
   if (error instanceof ApiException) {
     return json({ error: { code: error.code, message: error.message, details: error.details } }, { status: error.status });
   }
-  console.error("[rslmc] unhandled error:", error);
-  const message = error instanceof Error ? error.message : "Internal server error";
-  return json({ error: { code: "internal_error", message } }, { status: 500 });
+  // An unexpected error is a bug in the panel, not something the caller can act on, and its message
+  // is often a raw SQLite or filesystem string ("25 values for 24 columns", "/var/lib/…"). Log the
+  // whole thing with a short reference and hand the caller only that reference, so a report can be
+  // matched to the log line without leaking the schema or the disk layout.
+  const ref = crypto.randomUUID().slice(0, 8);
+  console.error(`[rslmc] unhandled error (ref ${ref}):`, error);
+  return json(
+    {
+      error: {
+        code: "internal_error",
+        message: `The panel hit an unexpected error (ref ${ref}). The details are in the panel log.`,
+        ref,
+      },
+    },
+    { status: 500 },
+  );
 }
 
 export type Handler = (ctx: RequestContext) => Promise<Response> | Response;
@@ -219,7 +232,17 @@ export function validate<T extends Record<string, Validator<any>>>(
 ): Validated<T> {
   const out: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
-  for (const [key, validator] of Object.entries(schema)) {
+  for (const [key, validator] of Object.entries(schema ?? {})) {
+    // `ctx.body()` is typed `any`, so calling validate(body, schema) instead of
+    // validate(schema, body) type-checks happily and then explodes deep inside the loop with
+    // "validator is not a function. (… 'validator' is 30)" — the 30 being a request value, which
+    // says nothing about the real mistake. Say it plainly instead.
+    if (typeof validator !== "function") {
+      throw new Error(
+        `validate(): arguments look swapped — "${key}" in the schema slot is a ${typeof validator}, ` +
+          `not a validator. Call validate(schema, body).`,
+      );
+    }
     const result = validator(input?.[key]);
     if (!result.ok) errors[key] = result.message;
     else out[key] = result.value;

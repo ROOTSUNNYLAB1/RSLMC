@@ -122,13 +122,22 @@ function PasswordField({
   placeholder?: string; autoFocus?: boolean; hint?: ReactNode; error?: string | null; loading?: boolean;
 }) {
   const [visible, setVisible] = useState(false);
+  // Typing a password blind is the usual reason a sign-in "just does not work": say it out loud.
+  const [capsLock, setCapsLock] = useState(false);
+  const trackCaps = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const on = event.getModifierState?.("CapsLock") ?? false;
+    if (on !== capsLock) setCapsLock(on);
+  };
   return (
-    <Field label={label} hint={hint} error={error}>
+    <Field label={label} hint={capsLock ? <span className="auth-caps">Caps Lock is on</span> : hint} error={error}>
       <span className="input-affix">
         <Input
           type={visible ? "text" : "password"}
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onKeyDown={trackCaps}
+          onKeyUp={trackCaps}
+          onBlur={() => setCapsLock(false)}
           autoComplete={autoComplete}
           placeholder={placeholder}
           autoFocus={autoFocus}

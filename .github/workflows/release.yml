@@ -69,6 +69,13 @@ jobs:
             echo
             echo "Calendar versioning — \`${{ steps.version.outputs.version }}\` means a build from that date."
             echo
+            echo "### What changed"
+            echo
+            # The tag's own commit body is the change list, so the notes a panel shows under
+            # Administration → About are the same text that was written when the fix was made.
+            git log -1 --pretty=format:'%b' "$GITHUB_REF_NAME"
+            echo
+            echo
             echo "### Upgrading a running panel"
             echo
             echo "1. Administration → About → **Check for updates**"

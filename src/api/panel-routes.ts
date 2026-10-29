@@ -214,7 +214,7 @@ export function registerPanelRoutes(router: Router): void {
 
   router.patch("/api/panel/update/settings", async (ctx) => {
     requireAdmin(ctx.user);
-    const body = validate(await ctx.body(), updateSettingsSchema);
+    const body = validate(updateSettingsSchema, await ctx.body());
     const saved = saveSettings(body);
     recordActivity({
       type: "panel.update_settings", actorName: ctx.user!.username, target: "panel", metadata: { ...saved },

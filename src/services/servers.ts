@@ -324,25 +324,33 @@ function reserveAllocation(nodeId: number, ip: string, port: number, serverId: n
     "SELECT id, server_id FROM allocations WHERE node_id = ? AND ip = ? AND port = ?",
     [nodeId, ip, port],
   );
+  let allocationId: number;
   if (!existing) {
-    insert("INSERT INTO allocations (node_id, ip, port, server_id, notes) VALUES (?, ?, ?, ?, ?)", [
+    allocationId = insert("INSERT INTO allocations (node_id, ip, port, server_id, notes) VALUES (?, ?, ?, ?, ?)", [
       nodeId, ip, port, serverId, note,
     ]);
-    return;
-  }
-  if (existing.server_id == null) {
+  } else if (existing.server_id == null) {
     run("UPDATE allocations SET server_id = ?, notes = ? WHERE id = ?", [serverId, note, existing.id]);
-    return;
-  }
-  const owner = queryOne<{ id: number; name: string }>("SELECT id, name FROM servers WHERE id = ?", [existing.server_id]);
-  if (!owner) {
+    allocationId = existing.id;
+  } else {
+    const owner = queryOne<{ id: number; name: string }>("SELECT id, name FROM servers WHERE id = ?", [existing.server_id]);
+    if (owner) {
+      throw new ApiException(
+        409, "allocation_conflict",
+        `Port ${port} on ${ip} is already allocated to the server "${owner.name}" (#${owner.id}). Pick another port.`,
+      );
+    }
     // Orphaned allocation from a server that no longer exists — reclaim it.
     run("UPDATE allocations SET server_id = ?, notes = ? WHERE id = ?", [serverId, note, existing.id]);
-    return;
+    allocationId = existing.id;
   }
-  throw new ApiException(
-    409, "allocation_conflict",
-    `Port ${port} on ${ip} is already allocated to the server "${owner.name}" (#${owner.id}). Pick another port.`,
+  // `allocations.server_id` and `server_allocations` both describe "who owns this port". Only the
+  // first was ever written, so the join table stayed empty and releaseAllocations() was deleting
+  // from a table that nothing filled. Keep the two in step: this call always claims the primary port.
+  run(
+    `INSERT INTO server_allocations (server_id, allocation_id, primary_port) VALUES (?, ?, 1)
+     ON CONFLICT(server_id, allocation_id) DO UPDATE SET primary_port = 1`,
+    [serverId, allocationId],
   );
 }
 
@@ -416,7 +424,7 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
       `INSERT INTO servers (uuid, name, description, icon, owner_id, node_id, software, software_version, mc_version,
         java_major, status, memory_mb, cpu_percent, disk_mb, bind_ip, port, public_host, public_port,
         jvm_args, server_args, auto_start, crash_recovery, enforcement, eula_accepted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         uuid, input.name, input.description ?? null, input.icon ?? null, input.ownerId, input.nodeId,
         input.software, input.mcVersion, javaMajor, input.memoryMb, input.cpuPercent, input.diskMb,
