@@ -118,9 +118,61 @@ the temperature rather than the hue.
 
 ## Quick start
 
-Three commands to a running panel, then a short tour of what to click.
+### Install it in one line (Linux, WSL, macOS)
 
-### Running RSLMC
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/ROOTSUNNYLAB1/RSLMC/main/install.sh)
+```
+
+That starts an interactive installer — no repo to clone, no Bun to install by hand:
+
+```
+  ██████╗ ███████╗██╗     ███╗   ███╗ ██████╗
+  ██╔══██╗██╔════╝██║     ████╗ ████║██╔════╝
+  ██████╔╝███████╗██║     ██╔████╔██║██║
+  ██╔══██╗╚════██║██║     ██║╚██╔╝██║██║
+  ██║  ██║███████║███████╗██║ ╚═╝ ██║╚██████╗
+  ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚═╝ ╚═════╝
+  Minecraft server panel · installer 1.0.0
+
+  [2/14] Choosing what to install
+  Which version should be installed?
+    1) 2026.10.29.3    (latest)
+  Version [2026.10.29.3] _
+```
+
+It asks five things, then does the rest with a live step list:
+
+| Question | Default | Notes |
+| --- | --- | --- |
+| **Version** | latest release | pick a number, press Enter, or type a version like `2026.10.29.2` |
+| **Install path** | `/opt/rslmc` | where the code lives |
+| **Data folder** | `/var/lib/rslmc` | database, servers, worlds, backups — never replaced by an upgrade |
+| **Link (address)** | `0.0.0.0` | every interface, local only, or one specific IP |
+| **Port** | `3000` | checked for conflicts before anything is written |
+
+Then it: installs Bun if needed (checksum-verified) · downloads the release and verifies its SHA-256
+against the published `SHA256SUMS` · creates an `rslmc` service account · writes
+`/etc/rslmc/rslmc.env` (mode 600, real 64-character secret) · installs and enables a hardened
+systemd unit · starts the panel and waits until `/api/setup/status` really answers · prints the URL
+and the bootstrap login (`admin` / `admin123` — change it on first sign-in).
+
+Everything it asks can be given as a flag, for scripted installs:
+
+```bash
+bash <(curl -sSL …/install.sh) --unattended \
+  --version latest --path /opt/rslmc --data-dir /var/lib/rslmc \
+  --host 0.0.0.0 --port 3000
+```
+
+Re-running the same command upgrades in place: same data folder, same secret, previous code kept
+until the new version answers. `--uninstall` stops and removes it (data kept), `--purge` deletes the
+data folder too, `--dry-run` prints the plan, `--help` lists everything.
+Full manual: **[docs/install.md](docs/install.md)**.
+
+### Or run it from a checkout
+
+Three commands to a running panel, then a short tour of what to click.
 
 #### 1. Requirements
 

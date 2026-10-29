@@ -29,6 +29,20 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Installer syntax and lint
+        shell: bash
+        run: |
+          bash -n install.sh
+          echo "install.sh parses"
+          # shellcheck is advisory here: it is not installed on every runner, but when it is, it fails
+          # the job on genuine errors (-S error) so a broken installer cannot be tagged.
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -S error install.sh
+            echo "shellcheck: no errors"
+          else
+            echo "shellcheck not installed on this runner — skipped (bash -n already passed)"
+          fi
+
       - name: Unit and integration tests
         shell: bash
         run: |
