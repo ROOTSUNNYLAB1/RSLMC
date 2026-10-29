@@ -377,6 +377,11 @@ read from the process, the database or GitHub at request time.
 A failure stops the job, keeps the old code in place (or restores the rollback archive) and says which
 step failed and why. The panel never half-installs and never invents a success.
 
+The flow above is exercised against the **real** GitHub releases, not a mirror: a copy of the panel at
+`2026.10.28` checked `github.com/ROOTSUNNYLAB1/RSLMC/releases` (through the public API, no token),
+downloaded `rslmc-2026.10.29.tar.gz`, matched the published `SHA256SUMS`, swapped the code, restarted in
+1.4 s with **2 servers kept running**, and then went on to install `2026.10.29.2` the same way.
+
 **Restart RSLMC** asks for confirmation, then hands every running server to its relay, closes the HTTP
 and WebSocket listeners, and a small detached relauncher starts the new process, waits for the port and
 records how long the boot took. The page you are looking at reconnects on its own; the restart history
@@ -895,7 +900,7 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 ## Testing
 
 ```bash
-bun test                              # 152 unit + integration tests (17 files)
+bun run test                          # every suite, one process per file (19 files, 163 tests)
 bun run tests/security/pentest.ts     # 114 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```
