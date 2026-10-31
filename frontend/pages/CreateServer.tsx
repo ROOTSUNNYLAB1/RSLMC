@@ -38,8 +38,6 @@ export function CreateServerPage() {
   const [error, setError] = useState<string | null>(null);
   const [installInfo, setInstallInfo] = useState<{ id: string; label: string; progress: number; total: number; done: boolean; error?: string } | null>(null);
 
-  const selectedNode = nodes.find((node) => node.id === form.nodeId) ?? null;
-
   const [form, setForm] = useState({
     name: "", description: "", ownerId: 0, nodeId: 0,
     software: "paper" as ServerSoftwareId, mcVersion: "", javaMajor: 0,
@@ -48,6 +46,10 @@ export function CreateServerPage() {
     memoryMb: 2048, cpuPercent: 100, diskMb: 10240,   // CPU default widens to all host cores on load
     jvmArgs: "", serverArgs: "nogui", autoStart: false, crashRecovery: true, acceptEula: false,
   });
+
+  // Declared *after* `form`: reading `form` above the useState call is a temporal-dead-zone error
+  // ("Cannot access 'form' before initialization") that blanks the page the moment it renders.
+  const selectedNode = nodes.find((node) => node.id === form.nodeId) ?? null;
 
   useEffect(() => {
     // "Full power" default: an allocation of 100 % is a single core, which throttles Minecraft.

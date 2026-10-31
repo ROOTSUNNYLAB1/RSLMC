@@ -22,6 +22,7 @@ import { SchedulesPage } from "./pages/Schedules";
 import { DatabasesPage, SettingsPage, StartupPage } from "./pages/Settings";
 import { NetworkingPage } from "./pages/Networking";
 import { ActivityPage } from "./pages/Activity";
+import { ErrorBoundary } from "./components/error-boundary";
 import { CreateServerPage } from "./pages/CreateServer";
 import { AccountPage, NotificationsPage } from "./pages/Account";
 import { AdminDashboardPage, AdminNav, AuditPage, JavaPage, NodesPage, RolesPage, SignInPage, SystemPage, UsersPage } from "./pages/Admin";
@@ -290,8 +291,14 @@ export function App() {
         </Banner>
       ) : null}
       {/* Keyed by pathname: every navigation gets a short, non-jarring enter transition. */}
+      {/*
+        Keyed by pathname, so a failed page is forgotten as soon as the operator navigates away —
+        the boundary resets with the route instead of pinning the error card forever.
+      */}
       <div className="route-view" key={pathname}>
-        {body()}
+        <ErrorBoundary where={`${segments[0] ?? "dashboard"}${segments[1] ? ` / ${segments[1]}` : ""}`}>
+          {body()}
+        </ErrorBoundary>
       </div>
     </Shell>
   );

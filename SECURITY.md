@@ -9,7 +9,7 @@ bun run tests/security/pentest.ts          # 125 checks, exit code 1 if any fail
 bun run tests/security/pentest.ts --json   # machine readable, also written to last-run.json
 ```
 
-Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 28 files, 237 tests, 0 fail; `tsc --noEmit` clean).
+Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 30 files, 249 tests, 0 fail; `tsc --noEmit` clean).
 
 ---
 
@@ -28,6 +28,7 @@ fixed, regression-tested, and every one now has a permanent check in the suite.
 | 6 | **Low** | **Absolute data-directory path disclosed anonymously.** `GET /api/setup/status` returned `/opt/rslmc/database/rslmc.db` to any visitor. | Fingerprinting / information disclosure for an unauthenticated attacker. | The path is only returned to an administrator; anonymous visitors get a neutral description. |
 
 | 7 | **Medium** | **Typed Properties editor was inconsistent with the file manager.** `PUT …/properties` required `server.settings`, so a plain account could edit `server.properties` by hand in the file manager but every field in the typed editor was disabled. | Either the account could change everything (by hand) or nothing (in the editor) — the UI was misleading, and it also accepted a reserved key silently instead of explaining. | The typed editor now needs `server.files` (the same permission the raw editor needs). A reserved key that would actually *change* is refused by name (`server-port is managed by RSLMC…`), while the editor's habit of posting the whole value map is still ignored. Saving `motd`-style keys works for the account that owns the server. |
+| 8 | **Low** | **One render error blanked the entire panel.** `CreateServer.tsx` read its `form` state above the `useState` that declares it, so the first render threw `Cannot access 'form' before initialization`; React then unmounted the whole tree and the operator got a black window with no navigation and no message. Triggered simply by opening *Servers → New Server*. | The wizard — and with it the only way to create a server — was unusable, with no way to see why. | The read was moved below its declaration, and every route is now wrapped in an `ErrorBoundary` keyed by pathname: the shell survives, the failing view names the error and offers reload / try again / back to the dashboard. Guarded by `tests/page-render.test.ts`, which renders the pages in happy-dom and asserts the boundary keeps the surrounding tree mounted. |
 
 Additionally hardened while reviewing: the public-address field now refuses loopback, RFC1918,
 CGNAT, multicast and link-local literals (**including `169.254.169.254`**, the cloud metadata
@@ -112,6 +113,7 @@ The values are rendered as a `data-theme` attribute on `<html>`, which only sele
 nothing from the request is ever interpolated into markup or a style attribute. `tests/themes.test.ts`
 (8 tests) additionally asserts the palette stays dark and non-neon (accent saturation and lightness
 bands, background lightness) and that every accent clears 4:1 contrast against its own background.
+
 
 ---
 

@@ -957,6 +957,13 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
   a mustard accent on interactive chrome only, and no gradient edge on the summary cards. Status
   pills, the RUNNING badge and every other semantic colour are untouched, and a stylesheet test
   checks that the theme block never redefines `--green` or `--red`.
+* **A broken page cannot blank the panel.** One React error used to unmount the whole tree — after a
+  temporal-dead-zone bug in the Create Server wizard the operator was left with an empty black window
+  and a `ReferenceError` in the console. Every route is now wrapped in an error boundary: the shell,
+  the sidebar and your servers keep working, and the failed view explains itself in the theme you
+  chose, names the real error, and offers reload / try-again / back to the dashboard. A happy-dom
+  test renders the pages for real (that is what catches a first-render crash a type-check cannot see)
+  and asserts the boundary keeps the surrounding tree alive.
 * **Profile picture** on *My Profile* — upload, replace, remove, or drag a file onto the circle.
   PNG/JPEG/WebP up to 2 MB, identified by magic bytes (a renamed script is refused, not stored), and
   served back through an authenticated route with a version ETag so a new picture appears instantly.

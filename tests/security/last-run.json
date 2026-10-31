@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-31T11:04:37.734Z",
-  "dataDir": "/tmp/rslmc-pentest-yLQDVk",
+  "generatedAt": "2026-10-31T14:33:17.555Z",
+  "dataDir": "/tmp/rslmc-pentest-kT36iW",
   "total": 125,
   "failed": 0,
   "areas": [
@@ -880,7 +880,7 @@
           "area": "Updates",
           "name": "About reports a CalVer version and the update settings",
           "ok": true,
-          "detail": "2026.10.31.2 interval=360",
+          "detail": "2026.10.31.3 interval=360",
           "severity": "high"
         }
       ]
