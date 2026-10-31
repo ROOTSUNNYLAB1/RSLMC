@@ -2534,7 +2534,10 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
   border-color: var(--accent);
   box-shadow: 3px 3px 0 0 var(--accent-line);
 }
-[data-theme="neobrutalism"] .nav-item { border: 2px solid transparent; margin: 2px 8px; }
+/* No horizontal margin here: .nav-item is width:100% of the sidebar's padded column, so adding a
+   side margin pushed the active pill 16 px past the sidebar edge and over the page content. The
+   inset comes from .sidebar-scroll's padding. */
+[data-theme="neobrutalism"] .nav-item { border: 2px solid transparent; margin: 2px 0; }
 [data-theme="neobrutalism"] .nav-item.active {
   border-color: var(--accent);
   box-shadow: 2px 2px 0 0 rgba(217, 162, 39, 0.35);

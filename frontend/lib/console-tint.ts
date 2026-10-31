@@ -18,7 +18,8 @@
 
 export type TintKind =
   | "timestamp" | "thread" | "level-info" | "level-warn" | "level-error" | "level-faint"
-  | "text" | "ready" | "join" | "leave" | "lost" | "player" | "coord" | "plugin" | "dim";
+  | "text" | "ready" | "join" | "leave" | "lost" | "player" | "coord" | "plugin" | "dim"
+  | "command" | "number" | "label";
 
 export interface TintRun {
   text: string;
@@ -42,11 +43,14 @@ export const TINT_COLOURS: Record<TintKind, string> = {
   coord: "#8fccdd",
   plugin: "#aab4ea",
   dim: "#79808e",
+  command: "#8ec7e8",     /* /help style command listings */
+  number: "#d8c98a",      /* counts, percentages, seeds */
+  label: "#b9c0cf",       /* a "Server Plugins (2):" style heading */
 };
 
 /** Kinds that carry meaning, so they are drawn at weight 600 instead of the terminal's 400. */
 export const TINT_BOLD_KINDS: ReadonlySet<TintKind> = new Set<TintKind>([
-  "level-info", "level-warn", "level-error", "ready", "join", "leave", "lost", "player",
+  "level-info", "level-warn", "level-error", "ready", "join", "leave", "lost", "player", "command",
 ]);
 
 const LEVEL_KIND: Record<string, TintKind> = {
@@ -60,8 +64,17 @@ const LEVEL_KIND: Record<string, TintKind> = {
   TRACE: "level-faint",
 };
 
-/** `[10:43:13] [Server thread/INFO]: rest of the line` — the shape every modern server logs in. */
-const PREFIX = /^(\[\d{1,2}:\d{2}:\d{2}\])\s+(\[[^\]]*?([A-Za-z]+)\]):?\s?/;
+/*
+ * Two shapes are in the wild, and both must be coloured:
+ *   `[10:43:13] [Server thread/INFO]: …`  — Paper / modern vanilla (thread name present)
+ *   `[14:49:57 INFO]: …`                  — classic Bukkit/Spigot formatter, and anything logged
+ *                                           through a java.util.logging handler that omits the thread.
+ * The second one is what a Spigot/Paper server with quiet plugins actually prints, so a console that
+ * only matches the first renders every line as flat grey.
+ */
+const PREFIX = /^(\[\d{1,2}:\d{2}:\d{2}\])\s+\[([^\]]*?)\/([A-Za-z]+)\]:?\s?/;
+/** `[14:49:57 INFO]: …` — time and level inside one bracket (classic Bukkit / plain JUL handler). */
+const PREFIX_COMPACT = /^(\[\d{1,2}:\d{2}:\d{2})\s+([A-Za-z]+)\](:?\s?)/;
 
 const JOIN = /\b([A-Za-z0-9_]{2,16})(\s+(?:joined the game)\b)/;
 const LEAVE = /\b([A-Za-z0-9_]{2,16})(\s+(?:left the game)\b)/;
@@ -70,6 +83,31 @@ const CHAT = /^<([A-Za-z0-9_]{2,16})>/;
 const READY = /\bDone \(\d+(?:[.,]\d+)?s\)!.*$/;
 const COORDS = /(?<![\w.])(-?\d{1,7})[ ,](-?\d{1,7})[ ,](-?\d{1,7})(?![\w.])/;
 const PLUGIN = /\[([A-Za-z][A-Za-z0-9 _\-]{1,24})\]/g;
+/** `/tm: A Mojang provided command.` — one entry of a `/help` listing. */
+const COMMAND_LIST = /^(\/[A-Za-z0-9:_\-]{1,40})(?=:\s|:$)/;
+/** `- ViaBackwards, ViaVersion` — the body of `/plugins`, one entry per name. */
+const PLUGIN_LIST = /^(\s*-\s+)([A-Za-z][A-Za-z0-9+/]{2,}(?:\s*,\s*[A-Za-z][A-Za-z0-9+/]{2,})*)(\s*)$/;
+const PLUGIN_LIST_NAME = /[A-Za-z][A-Za-z0-9+/]{2,}/g;
+/**
+ * A short Title-Case heading that ends in a colon: `Bukkit Plugins:`, `i Server Plugins (2):`.
+ * A sentence that merely ends in a colon ("There are 0 of a max of 20 players online:") is rejected,
+ * because colouring that as a heading would bury the counts it is trying to show.
+ */
+function isHeading(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 4 || trimmed.length > 34 || !trimmed.endsWith(":")) return false;
+  const words = trimmed.slice(0, -1).split(" ");
+  if (words.length > 4) return false;
+  return words.every((word, index) => {
+    if (!word) return false;
+    if (/^\(\d+\)$/.test(word)) return true;                       // a count in brackets
+    const first = word[0]!;
+    if (index === 0) return /[A-Za-z]/.test(first);                   // first word may start either way
+    return first === first.toUpperCase() && first !== first.toLowerCase();
+  });
+}
+/** Numbers that carry meaning: percentages, counts, `x of y`, seeds. */
+const NUMBER = /(?<![\w.:/-])(?:\d+(?:\.\d+)?%|\(\d+\)|\b\d+\b(?=[^\d]))/g;
 /** Brackets that are part of the log prefix, not a plugin name. */
 const NOT_PLUGIN = new Set([
   "INFO", "WARN", "WARNING", "ERROR", "SEVERE", "DEBUG", "TRACE", "FATAL",
@@ -87,27 +125,38 @@ export function tintLine(input: string): TintRun[] | null {
   let levelKind: TintKind | undefined;
 
   const prefix = PREFIX.exec(rest);
+  const compact = prefix ? null : PREFIX_COMPACT.exec(rest);
   if (prefix) {
     runs.push({ text: prefix[1]!, kind: "timestamp" });
     runs.push({ text: " ", kind: "text" });
     const bracket = prefix[2]!;
     const level = (prefix[3] ?? "").toUpperCase();
     levelKind = LEVEL_KIND[level];
-    // `[Server thread/INFO]` → thread part neutral, level word coloured.
-    const slash = bracket.lastIndexOf("/");
-    if (levelKind && slash !== -1) {
-      runs.push({ text: `[${bracket.slice(1, slash)}/`, kind: "thread" });
-      runs.push({ text: level, kind: levelKind });
-      runs.push({ text: "]", kind: "thread" });
-    } else if (levelKind) {
-      runs.push({ text: `[`, kind: "thread" });
+    // `[Server thread/INFO]` → thread part neutral, level word coloured. The regex captures the
+    // thread on its own (the slash is the delimiter), so an empty capture means "no thread shown".
+    if (levelKind) {
+      runs.push({ text: bracket ? `[${bracket}/` : "[", kind: "thread" });
       runs.push({ text: level, kind: levelKind });
       runs.push({ text: "]", kind: "thread" });
     } else {
-      runs.push({ text: bracket, kind: "thread" });
+      runs.push({ text: `[${bracket}]`, kind: "thread" });
     }
     runs.push({ text: ": ", kind: "thread" });
     rest = rest.slice(prefix[0].length);
+  } else if (compact) {
+    /*
+     * `[14:49:57 INFO]: <message>` — the time and the level share one bracket. This is the format a
+     * Spigot/Paper server with plugins actually writes to a pipe, and it used to fall straight
+     * through every rule, which is why a whole console of `/help` output rendered as flat grey.
+     */
+    const levelWord = compact[2]!;
+    levelKind = LEVEL_KIND[levelWord.toUpperCase()];
+    runs.push({ text: compact[1]!, kind: "timestamp" });          // "[14:49:57"
+    runs.push({ text: " ", kind: "text" });
+    runs.push({ text: levelWord, kind: levelKind ?? "thread" });
+    runs.push({ text: "]", kind: "thread" });
+    if (compact[3]) runs.push({ text: compact[3], kind: "thread" });
+    rest = rest.slice(compact[0].length);
   } else {
     // Lines from the panel itself ("Starting Paper 1.21.4 on …") start with a capitalised phrase.
     const readyFallback = READY.exec(rest);
@@ -115,6 +164,17 @@ export function tintLine(input: string): TintRun[] | null {
       runs.push({ text: rest, kind: "ready" });
       return runs;
     }
+  }
+
+  /*
+   * A warning or an error is the line the operator is looking for, so the whole body carries the
+   * colour — in a 6 000-line buffer that is the difference between a grey wall and something you can
+   * scan. This runs before the per-token rules below, so a warning never dissolves into plugin names
+   * and numbers.
+   */
+  if ((levelKind === "level-warn" || levelKind === "level-error") && rest) {
+    runs.push({ text: rest, kind: levelKind });
+    return runs;
   }
 
   // A ready line is the single most useful thing on screen — colour all of it.
@@ -160,6 +220,39 @@ export function tintLine(input: string): TintRun[] | null {
     return runs;
   }
 
+  // `/tm: A Mojang provided command.` — long `/help` dumps are the worst offenders for grey, so the
+  // command name gets the accent and the description stays quiet.
+  const command = COMMAND_LIST.exec(rest);
+  if (command) {
+    runs.push({ text: command[1]!, kind: "command" });
+    runs.push({ text: rest.slice(command[1]!.length), kind: "text" });
+    return runs;
+  }
+
+  // `- ViaBackwards, ViaVersion` — the body of /plugins, one plugin per name.
+  const list = PLUGIN_LIST.exec(rest);
+  if (list) {
+    runs.push({ text: list[1]!, kind: "dim" });
+    let at = 0;
+    for (const name of list[2]!.matchAll(PLUGIN_LIST_NAME)) {
+      const start = name.index ?? 0;
+      if (start > at) runs.push({ text: list[2]!.slice(at, start), kind: "dim" });
+      runs.push({ text: name[0], kind: "plugin" });
+      at = start + name[0].length;
+    }
+    if (at < list[2]!.length) runs.push({ text: list[2]!.slice(at), kind: "dim" });
+    if (list[3]) runs.push({ text: list[3], kind: "dim" });
+    return runs;
+  }
+
+  if (isHeading(rest)) {
+    const trimmed = rest.trim();
+    const lead = rest.slice(0, rest.indexOf(trimmed));
+    if (lead) runs.push({ text: lead, kind: "text" });
+    runs.push({ text: trimmed, kind: "label" });
+    return runs;
+  }
+
   const coords = COORDS.exec(rest);
   if (coords) {
     runs.push({ text: rest.slice(0, coords.index), kind: "text" });
@@ -173,7 +266,22 @@ export function tintLine(input: string): TintRun[] | null {
    * colour rather than just the level word — in a 6000-line buffer that is the difference between a
    * grey wall and something you can scan.
    */
-  runs.push({ text: rest, kind: levelKind === "level-warn" || levelKind === "level-error" ? levelKind : "text" });
+  // Ordinary INFO chatter: at least lift the figures out of the sentence (counts, percentages,
+  // "0 of a max of 20 players", seed numbers) so a line is not one undifferentiated grey.
+  let cursor2 = 0;
+  NUMBER.lastIndex = 0;
+  let numberMatch: RegExpExecArray | null;
+  while ((numberMatch = NUMBER.exec(rest)) !== null) {
+    if (numberMatch.index > cursor2) runs.push({ text: rest.slice(cursor2, numberMatch.index), kind: "text" });
+    runs.push({ text: numberMatch[0], kind: "number" });
+    cursor2 = numberMatch.index + numberMatch[0].length;
+  }
+  if (cursor2 > 0) {
+    if (cursor2 < rest.length) runs.push({ text: rest.slice(cursor2), kind: "text" });
+    return runs;
+  }
+
+  runs.push({ text: rest, kind: "text" });
   // If every run is the same colour there is nothing gained from splitting the line.
   return runs.length > 1 ? runs : null;
 }

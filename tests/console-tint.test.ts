@@ -105,10 +105,61 @@ describe("plain Minecraft log lines", () => {
     expect(tintLine("some unstructured output with no shape at all")).toBeNull();
   });
 
-  test("panel-emitted lines still get structure", () => {
-    // systemLine() writes "[RSLMC] …" without a timestamp; it must not be torn apart
-    const system = tintLine("[RSLMC] Server started with a 2048 MB heap");
-    expect(system).toBeNull();
+  test("panel-emitted lines keep their bracket neutral", () => {
+    // systemLine() writes "[RSLMC] …" without a timestamp. The bracket is not a plugin name, but the
+    // figure in the sentence is still lifted out so the line is not one flat grey block.
+    const system = runs("[RSLMC] Server started with a 2048 MB heap");
+    expect(system.find((run) => run.text === "[RSLMC]")?.kind).toBeUndefined();
+    expect(system.find((run) => run.text === "2048")?.kind).toBe("number");
+    expect(system.map((run) => run.text).join("")).toBe("[RSLMC] Server started with a 2048 MB heap");
+  });
+});
+
+/*
+ * A Spigot/Paper server whose output goes through a plain java.util.logging handler writes
+ * `[14:49:57 INFO]: …` — the time and the level share one bracket. None of the earlier rules matched
+ * it, so a whole console of `/help` and `/plugins` output stayed flat grey (reported with a
+ * screenshot of a real server). These cases pin that format down.
+ */
+describe("compact Bukkit lines ([14:49:57 INFO]:)", () => {
+  const COMPACT = "[14:49:57 INFO]: /tm: A Mojang provided command.";
+
+  test("time and level are separated out of the shared bracket", () => {
+    const out = runs(COMPACT);
+    expect(out[0]).toEqual({ text: "[14:49:57", kind: "timestamp" });
+    expect(out.some((run) => run.text === "INFO" && run.kind === "level-info")).toBe(true);
+    expect(out.map((run) => run.text).join("")).toBe(COMPACT);
+  });
+
+  test("the command name in a /help listing gets its own colour", () => {
+    const out = runs(COMPACT);
+    expect(out.find((run) => run.text === "/tm")?.kind).toBe("command");
+    // …and the description stays quiet so the column of command names is what you see
+    expect(out.find((run) => run.text.includes("A Mojang provided command"))?.kind).toBe("text");
+  });
+
+  test("a compact WARN line colours its whole body", () => {
+    const warn = "[14:50:10 WARN]: [ViaVersion] Packet type not supported";
+    const out = runs(warn);
+    expect(out.find((run) => run.text === "WARN")?.kind).toBe("level-warn");
+    expect(out.some((run) => run.kind === "level-warn" && run.text.includes("not supported"))).toBe(true);
+  });
+
+  test("section headings and plugin lists from /plugins are coloured", () => {
+    const heading = runs("[14:50:03 INFO]: i Server Plugins (2):");
+    expect(heading.find((run) => run.text === "i Server Plugins (2):")?.kind).toBe("label");
+
+    const list = runs("[14:50:03 INFO]: - ViaBackwards, ViaVersion");
+    const names = list.filter((run) => run.kind === "plugin").map((run) => run.text);
+    expect(names).toEqual(["ViaBackwards", "ViaVersion"]);
+    expect(list.map((run) => run.text).join("")).toBe("[14:50:03 INFO]: - ViaBackwards, ViaVersion");
+  });
+
+  test("counts and percentages are lifted out of ordinary INFO lines", () => {
+    const spawn = runs("[10:43:13] [Server thread/INFO]: Preparing spawn area: 42%");
+    expect(spawn.find((run) => run.text === "42%")?.kind).toBe("number");
+    const players = runs("[10:44:02 INFO]: There are 0 of a max of 20 players online:");
+    expect(players.filter((run) => run.kind === "number").map((run) => run.text)).toEqual(["0", "20"]);
   });
 });
 

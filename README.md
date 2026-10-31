@@ -520,6 +520,12 @@ says so instead of pretending.
   byte is optional — capture paths that strip it (leaving `[38;2;…m`) are parsed the same way.
   Copy and log download always give clean text, and severity tinting (`ERROR`/`WARN`) is computed
   on the plain text so colour codes can never hide a failure.
+* **Both log shapes are understood.** Real servers write two prefixes: `[10:43:13] [Server thread/INFO]:`
+  from Paper and modern vanilla, and `[14:49:57 INFO]:` from a Spigot/Paper formatter that omits the
+  thread. The second one used to fall through every rule, which is why a console full of `/help` and
+  `/plugins` output still looked monochrome — command names now get the accent, section headings
+  (`Bukkit Plugins:`) get their own tone, plugin lists (`- ViaBackwards, ViaVersion`) are coloured per
+  name, and counts, percentages and seeds are lifted out of ordinary INFO lines.
 * **When the server sends no colour at all** — the normal case, because a Minecraft server only
   emits SGR on a real terminal: vanilla 1.21.4 under Temurin 21 writes zero escape bytes to a pipe,
   with or without `TERM` or `-Dlog4j.skipJansi=false` — the panel colours the line itself. The

@@ -141,6 +141,13 @@ describe("stylesheet", () => {
     expect(head).toContain("--radius: 0px");
     expect(css).toContain('[data-theme="neobrutalism"] .btn-primary');
     expect(css).toContain("var(--nb-shadow)");   // the solid offset shadow that defines the theme
+    // The nav pill spans the sidebar's padded column (width:100%); a side margin here used to push
+    // the active item past the sidebar edge and over the page content.
+    const navRule = /\[data-theme="neobrutalism"\] \.nav-item \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    const navMargin = /margin:\s*([^;}]+)/.exec(navRule)?.[1]?.trim() ?? "";
+    // horizontal margin must be 0 (a side inset here is what pushed the pill past the sidebar)
+    const [, horizontal] = navMargin.split(/\s+(?=\S+$)/);
+    expect(navMargin === "" || horizontal === "0").toBe(true);
     // …and it must not restyle status colours, or a RUNNING server would stop being green
     expect(head).not.toContain("--green:");
     expect(head).not.toContain("--red:");
