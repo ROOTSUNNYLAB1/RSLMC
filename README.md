@@ -996,7 +996,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (27 files, 233 tests)
+bun run test                          # every suite, one process per file (28 files, 237 tests)
 bun run tests/security/pentest.ts     # 125 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```

@@ -11,6 +11,7 @@ import { api, errorMessage } from "../lib/api";
 import { formatBytes, formatDuration, relativeTime, statusLabel, statusTone } from "../lib/format";
 
 interface AdminOverview {
+  panel: { version: string; mode: string; uptimeSeconds: number; bunVersion: string; dataDir: string | null };
   counts: {
     servers: number; onlineServers: number; offlineServers: number; users: number; nodes: number;
     onlineNodes: number; playersOnline: number; backups: number; failedOps: number; javaRuntimes: number;
@@ -191,7 +192,14 @@ export function DashboardPage() {
         <Card title="Panel health" icon={<ShieldCheck size={12} />} bodyClass="tight">
           <InfoList
             rows={[
-              { key: "Build", value: <span className="mono text-xs">RSLMC 1.0.0</span> },
+              {
+                key: "Build",
+                value: (
+                  <span className="mono text-xs" title={overview?.panel ? `Bun ${overview.panel.bunVersion} · ${overview.panel.mode} mode` : undefined}>
+                    {overview?.panel?.version ? `RSLMC ${overview.panel.version}` : <span className="faint">reading…</span>}
+                  </span>
+                ),
+              },
               {
                 key: "Resource enforcement",
                 value: <Pill tone={overview?.enforcement.memory.level === "enforced" ? "green" : "amber"}>

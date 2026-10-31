@@ -15,6 +15,18 @@ export class ApiError extends Error {
 
 let csrfToken: string | null = null;
 
+/*
+ * The panel stamps every API response with `x-rslmc-version`. Reading it here means the UI can show
+ * the version it is actually talking to instead of a number someone typed into the source. That is
+ * exactly how the dashboard ended up claiming a placeholder build while the panel reported a much
+ * newer one in its own activity feed.
+ */
+let panelVersion: string | null = null;
+
+export function getPanelVersion(): string | null {
+  return panelVersion;
+}
+
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
 }
@@ -37,6 +49,9 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
     credentials: "same-origin",
     ...init,
   });
+
+  const stamped = response.headers.get("x-rslmc-version");
+  if (stamped) panelVersion = stamped;
 
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok) {

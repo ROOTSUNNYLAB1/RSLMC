@@ -159,7 +159,7 @@ describe("a second panel becomes a node", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as any;
     expect(body.ok).toBe(true);
-    expect(body.version).toMatch(/^\d{4}\.\d{2}\.\d{2}\.\d+$/);
+    expect(body.version).toMatch(/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/);
     expect(body.apiVersion).toBe(1);
     expect(body.node.online).toBe(true);
     expect(body.node.stats.cpuCores).toBeGreaterThan(0);

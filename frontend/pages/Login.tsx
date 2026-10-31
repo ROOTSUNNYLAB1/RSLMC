@@ -95,7 +95,7 @@ function AuthLayout({ setup, children }: { setup: SetupInfo | null; children: Re
           </div>
 
           <div className="auth-hero-foot">
-            <span className="mono">v{setup?.version ?? "1.0.0"}</span>
+            {setup?.version ? <span className="mono">v{setup.version}</span> : <span className="mono faint">RSLMC</span>}
             <span className="auth-hero-dot" aria-hidden />
             <span>Production panel</span>
             {warnings.map((check) => (

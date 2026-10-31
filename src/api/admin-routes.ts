@@ -73,6 +73,15 @@ export function registerAdminRoutes(api: Router): void {
     )?.c ?? 0;
     const disk = diskUsage(PATHS.data);
     return json({
+      // The dashboard's "Panel health" card reads its build number from here; it used to be a
+      // hard-coded string that never changed with the release.
+      panel: {
+        version: APP_VERSION,
+        mode: MODE,
+        uptimeSeconds: Math.floor(process.uptime()),
+        bunVersion: Bun.version,
+        dataDir: ctx.user?.isRoot ? PATHS.data : null,
+      },
       counts: {
         servers: servers.length, onlineServers, offlineServers: servers.length - onlineServers,
         users, nodes: nodes.length,

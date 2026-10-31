@@ -9,7 +9,7 @@ bun run tests/security/pentest.ts          # 125 checks, exit code 1 if any fail
 bun run tests/security/pentest.ts --json   # machine readable, also written to last-run.json
 ```
 
-Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 27 files, 233 tests, 0 fail; `tsc --noEmit` clean).
+Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 28 files, 237 tests, 0 fail; `tsc --noEmit` clean).
 
 ---
 
