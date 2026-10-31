@@ -102,6 +102,12 @@ export const THEMES: ThemeDefinition[] = [
     mood: "Almost monochrome — grey accent, no colour at all.",
     swatch: { bg: "#070708", surface: "#0d0d0f", accent: "#c2c6cf", onAccent: "#0a0a0b" },
   },
+  {
+    id: "neobrutalism",
+    label: "Neobrutalism",
+    mood: "Hard edges, thick outlines and a mustard accent — flat panels with solid offset shadows.",
+    swatch: { bg: "#0a0a0e", surface: "#14141a", accent: "#d9a227", onAccent: "#12100a" },
+  },
 ];
 
 export const DEFAULT_THEME = "charcoal";

@@ -114,6 +114,39 @@ describe("catalogue", () => {
   });
 });
 
+/**
+ * Every theme is only real if the stylesheet implements it — a catalogue entry without a
+ * `[data-theme="…"]` block renders as the default and looks like a broken picker.
+ */
+describe("stylesheet", () => {
+  test("each theme in the catalogue has its own token block", async () => {
+    const css = await Bun.file("frontend/styles.css").text();
+    for (const id of themes.THEME_IDS) {
+      if (id === themes.DEFAULT_THEME) continue;      // charcoal lives in :root
+      expect(css.includes(`[data-theme="${id}"] {`)).toBe(true);
+    }
+  });
+
+  test("neobrutalism is a real theme, not just a colour swap", async () => {
+    const neo = themes.themeById("neobrutalism");
+    expect(neo.id).toBe("neobrutalism");
+    expect(neo.label).toBe("Neobrutalism");
+    expect(themes.THEME_IDS).toContain("neobrutalism");
+    const css = await Bun.file("frontend/styles.css").text();
+    // thick outlines, square corners and a hard offset shadow — the three things that make it read
+    // as neobrutalist rather than as another dark palette
+    const start = css.indexOf('[data-theme="neobrutalism"] {');
+    expect(start).toBeGreaterThan(0);
+    const head = css.slice(start, css.indexOf("}", start));
+    expect(head).toContain("--radius: 0px");
+    expect(css).toContain('[data-theme="neobrutalism"] .btn-primary');
+    expect(css).toContain("var(--nb-shadow)");   // the solid offset shadow that defines the theme
+    // …and it must not restyle status colours, or a RUNNING server would stop being green
+    expect(head).not.toContain("--green:");
+    expect(head).not.toContain("--red:");
+  });
+});
+
 describe("per-account preference", () => {
   test("new accounts start on the default theme", () => {
     const row = db.queryOne<{ theme: string }>("SELECT theme FROM users WHERE username = 'admin'")!;

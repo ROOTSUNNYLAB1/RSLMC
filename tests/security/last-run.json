@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-31T08:17:58.104Z",
-  "dataDir": "/tmp/rslmc-pentest-DKkAXd",
+  "generatedAt": "2026-10-31T11:04:37.734Z",
+  "dataDir": "/tmp/rslmc-pentest-yLQDVk",
   "total": 125,
   "failed": 0,
   "areas": [
@@ -880,7 +880,7 @@
           "area": "Updates",
           "name": "About reports a CalVer version and the update settings",
           "ok": true,
-          "detail": "2026.10.31.1 interval=360",
+          "detail": "2026.10.31.2 interval=360",
           "severity": "high"
         }
       ]
@@ -1061,7 +1061,7 @@
           "area": "Appearance",
           "name": "The theme catalogue is available to a signed-in account and non-empty",
           "ok": true,
-          "detail": "12 themes: charcoal, slate, midnight, ocean, …",
+          "detail": "13 themes: charcoal, slate, midnight, ocean, …",
           "severity": "high"
         },
         {

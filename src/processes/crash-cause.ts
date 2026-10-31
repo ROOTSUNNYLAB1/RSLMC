@@ -11,7 +11,9 @@ import type { ConsoleLine } from "../shared/types";
  */
 
 export interface CrashCause {
-  kind: "out_of_memory" | "native_threads" | "killed" | "port_in_use" | "world_corrupt" | "unknown";
+  kind:
+    | "out_of_memory" | "native_threads" | "killed" | "port_in_use" | "world_corrupt"
+    | "bad_jar" | "watchdog" | "unknown";
   /** One sentence an operator can act on. */
   message: string;
 }
@@ -71,7 +73,40 @@ export function explainCrash(input: CrashInput): CrashCause {
       message: "The server could not bind its port because something else is already listening on it. Change the allocation.",
     };
   }
-  if (/Exception reading|corrupt|Failed to load world|level\.dat is not/i.test(log)) {
+  /*
+   * The watchdog: a single tick took longer than 60 s, so the server killed itself rather than hang.
+   * Seen for real on a starved host (four busy cores next to a 1-core allocation) — the fix is less
+   * load, not a backup restore.
+   */
+  const tick = /A single server tick took ([\d.]+) seconds/i.exec(log);
+  if (tick || /java\.lang\.Error: Watchdog|Watching Server/i.test(log)) {
+    const took = tick ? ` A single server tick took ${tick[1]} seconds.` : "";
+    return {
+      kind: "watchdog",
+      message:
+        `The server watchdog stopped the process because the main thread stalled.${took} ` +
+        "That is lag, not corruption: check the CPU share this server gets, view-distance and forceloaded chunks, " +
+        "then start it again.",
+    };
+  }
+  /*
+   * A jar that is not a jar is the first thing that can go wrong after a download, and it is *not* a
+   * world problem — matching the bare word "corrupt" used to send operators to restore a perfectly
+   * healthy world. Check it before any world pattern.
+   */
+  if (/Invalid or corrupt jarfile|Error: Unable to access jarfile|no main manifest attribute/i.test(log)) {
+    return {
+      kind: "bad_jar",
+      message:
+        "The server jar stored for this server is missing or is not a runnable jar (the download was probably " +
+        "interrupted). Reinstall the server from the Versions section of the server's Overview page.",
+    };
+  }
+  if (
+    /Exception reading|Failed to load world|level\.dat is not|"corrupt":\s*true|\b(?:chunk|world|level\.dat|region file)\b[^\n]{0,60}\bcorrupt|\bcorrupt(?:ed)?\b[^\n]{0,60}\b(?:chunk|world|level\.dat|region file)\b/i.test(
+      log,
+    )
+  ) {
     return {
       kind: "world_corrupt",
       message: "A world file could not be read. Restore a backup of this world from the Backups page.",

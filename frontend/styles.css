@@ -693,7 +693,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 .console-line.warn .msg { color: var(--amber-text); }
 .console-line.error .msg { color: var(--red-text); }
 .console-line.ready .msg { color: var(--green-strong); }
-.console-line.cmd .msg { color: var(--text); }
+.console-line.cmd .msg { color: var(--accent); }   /* what *you* typed, not the server */
 .console-line.cmd .ts { color: var(--text-ghost); }
 .console-line mark { background: rgba(227, 179, 65, 0.3); color: #fff; border-radius: 2px; padding: 0 1px; }
 .console-input-row { display: flex; gap: 7px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--inset-2); }
@@ -2434,6 +2434,131 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
   --nav-active-bg: #c2c6cf;
   --nav-active-text: #0a0a0b;
   --nav-active-icon: #0a0a0b;
+}
+
+/* Neobrutalism --------------------------------------------------------------
+   The one theme that changes the shape language, not just the hue: flat panels, square
+   corners, a 2px outline on every block and a solid offset shadow that reads like a sticker
+   pressed onto the page. The accent is a warm mustard and is used only on interactive chrome
+   (active navigation, primary buttons, focus); status colours are untouched, so RUNNING still
+   means green and a crash still means red.
+   ------------------------------------------------------------------------- */
+[data-theme="neobrutalism"] {
+  --bg: #0a0a0e;
+  --bg-sidebar: #0c0c11;
+  --surface: #14141a;
+  --surface-2: #181820;
+  --surface-3: #1d1d26;
+  --surface-4: #23232e;
+  --inset: #08080b;
+  --inset-2: #0d0d12;
+  --raised: #16161d;
+  --hover: #1b1b24;
+  --track: #1d1d26;
+  --line-soft: #1b1b23;
+  --border: #3a3a46;          /* outlines are deliberately visible in this theme */
+  --border-2: #4d4d5b;
+  --border-3: #66667a;
+  --text: #ededf2;
+  --text-strong: #ffffff;
+  --text-dim: #a7a7b4;
+  --text-faint: #8a8a98;
+  --text-ghost: #62626f;
+  --accent: #d9a227;
+  --pill-text: #12100a;
+  --text-nav: #b3b3c0;
+  --text-nav-icon: #8a8a98;
+  --text-nav-icon-hover: #ffffff;
+  --accent-soft: rgba(217, 162, 39, 0.15);
+  --accent-line: rgba(217, 162, 39, 0.5);
+  --pill-bg: #f4f2ea;
+  --pill-bg-hover: #ffffff;
+  --pill-badge-bg: #12100a;
+  --pill-badge-text: #d9a227;
+  --nav-active-bg: #d9a227;
+  --nav-active-text: #12100a;
+  --nav-active-icon: #12100a;
+  /* shape language */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-lg: 0px;
+  --nb-shadow: rgba(255, 255, 255, 0.17);
+  --shadow-sm: 2px 2px 0 0 rgba(255, 255, 255, 0.1);
+  --shadow-md: 5px 5px 0 0 rgba(255, 255, 255, 0.15);
+}
+
+/* Square corners everywhere the design system used a radius. */
+[data-theme="neobrutalism"] .card,
+[data-theme="neobrutalism"] .stat-card,
+[data-theme="neobrutalism"] .btn,
+[data-theme="neobrutalism"] .btn-sm,
+[data-theme="neobrutalism"] .input,
+[data-theme="neobrutalism"] .select,
+[data-theme="neobrutalism"] .textarea,
+[data-theme="neobrutalism"] .tab,
+[data-theme="neobrutalism"] .pill,
+[data-theme="neobrutalism"] .brand-mark,
+[data-theme="neobrutalism"] .nav-item,
+[data-theme="neobrutalism"] .modal,
+[data-theme="neobrutalism"] .modal-backdrop,
+[data-theme="neobrutalism"] .theme-swatch,
+[data-theme="neobrutalism"] .theme-preview {
+  border-radius: 0;
+}
+
+/* A block in this theme is an outlined slab. Only y-shadows were possible before, so a solid
+   offset is added rather than replacing the existing elevation. */
+[data-theme="neobrutalism"] .card,
+[data-theme="neobrutalism"] .stat-card {
+  border-width: 2px;
+  border-color: var(--border);
+  box-shadow: 5px 5px 0 0 var(--nb-shadow);
+}
+[data-theme="neobrutalism"] .card-header { border-bottom: 2px solid var(--border); }
+[data-theme="neobrutalism"] .stat-card::before { display: none; }   /* no gradient edge */
+[data-theme="neobrutalism"] .stat-card:hover {
+  border-color: var(--border-2);
+  transform: translate(-1px, -1px);
+  box-shadow: 6px 6px 0 0 var(--nb-shadow);
+}
+
+/* Interactive chrome gets the accent edge, with the label pushed on hover like a real button. */
+[data-theme="neobrutalism"] .btn {
+  border-width: 2px;
+  border-color: var(--border-2);
+  box-shadow: 2px 2px 0 0 rgba(255, 255, 255, 0.08);
+}
+[data-theme="neobrutalism"] .btn:hover:not(:disabled) { transform: translate(-1px, -1px); }
+[data-theme="neobrutalism"] .btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: none; }
+[data-theme="neobrutalism"] .btn-primary {
+  border-color: var(--accent);
+  box-shadow: 3px 3px 0 0 var(--accent-line);
+}
+[data-theme="neobrutalism"] .nav-item { border: 2px solid transparent; margin: 2px 8px; }
+[data-theme="neobrutalism"] .nav-item.active {
+  border-color: var(--accent);
+  box-shadow: 2px 2px 0 0 rgba(217, 162, 39, 0.35);
+}
+[data-theme="neobrutalism"] .tab { border: 2px solid transparent; }
+[data-theme="neobrutalism"] .tab.active { border-color: var(--accent); }
+[data-theme="neobrutalism"] .input,
+[data-theme="neobrutalism"] .select,
+[data-theme="neobrutalism"] .textarea { border-width: 2px; }
+[data-theme="neobrutalism"] .input:focus,
+[data-theme="neobrutalism"] .select:focus,
+[data-theme="neobrutalism"] .textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 3px 3px 0 0 var(--accent-line);
+}
+[data-theme="neobrutalism"] .sidebar { border-right-width: 2px; border-right-color: var(--border); }
+[data-theme="neobrutalism"] .topbar { border-bottom-width: 2px; }
+[data-theme="neobrutalism"] .pill { border-width: 2px; }
+[data-theme="neobrutalism"] .theme-swatch { border-width: 2px; }
+[data-theme="neobrutalism"] .card-title { font-weight: 700; letter-spacing: 0.01em; }
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="neobrutalism"] .stat-card:hover,
+  [data-theme="neobrutalism"] .btn:hover:not(:disabled),
+  [data-theme="neobrutalism"] .btn:active:not(:disabled) { transform: none; }
 }
 
 /* ========================= Theme picker ================================= */

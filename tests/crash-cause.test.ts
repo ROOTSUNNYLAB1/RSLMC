@@ -60,6 +60,36 @@ describe("explainCrash()", () => {
     expect(cause.message).toContain("does not name a cause");
   });
 
+  test("a watchdog shutdown is reported as lag, with the real tick time", () => {
+    const cause = explainCrash({
+      lines: [
+        "[10:58:44] [Server Watchdog/ERROR]: A single server tick took 60.00 seconds (should be max 0.05)",
+        "[10:58:44] [Server Watchdog/ERROR]: Considering it to be crashed, server will forcibly shutdown.",
+      ],
+      exitCode: 1,
+    });
+    expect(cause.kind).toBe("watchdog");
+    expect(cause.message).toContain("60.00 seconds");
+    expect(cause.message).not.toContain("Backups");
+  });
+
+  test("a jar that is not a runnable jar is not reported as a world problem", () => {
+    const cause = explainCrash({ lines: ["Error: Invalid or corrupt jarfile server.jar"], exitCode: 1 });
+    expect(cause.kind).toBe("bad_jar");
+    expect(cause.message).toContain("Reinstall");
+    expect(cause.message).not.toContain("Backups");
+  });
+
+  test("a genuinely corrupt chunk still points at backups", () => {
+    for (const line of [
+      "java.io.IOException: Chunk file at [0, 0] is corrupt",
+      "Detected a corrupt chunk, regenerating r.0.0.mca",
+      "level.dat is not a valid world file",
+    ]) {
+      expect(explainCrash({ lines: [line], exitCode: 1 }).kind).toBe("world_corrupt");
+    }
+  });
+
   test("accepts raw strings as well as ConsoleLine objects", () => {
     const cause = explainCrash({ lines: ["java.lang.OutOfMemoryError: Java heap space"], exitCode: 0 });
     expect(cause.kind).toBe("out_of_memory");

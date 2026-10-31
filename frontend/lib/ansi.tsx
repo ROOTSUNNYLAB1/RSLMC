@@ -1,4 +1,12 @@
 import { Fragment, memo, useMemo } from "react";
+import {
+  TINT_BOLD_KINDS,
+  TINT_COLOURS,
+  hasSectionCodes,
+  parseSectionCodes,
+  tintLine,
+  type TintKind,
+} from "./console-tint";
 
 /**
  * ANSI/SGR parser for the console.
@@ -130,9 +138,46 @@ function sgrParams(sequence: string): number[] {
   return raw.split(";").map((part) => (part === "" ? 0 : Number(part)));
 }
 
+/**
+ * Runs from the plain-text tint map (see console-tint.ts) expressed as console segments, so one
+ * renderer handles both a real ANSI line and a plain log line the panel coloured itself.
+ */
+function tintSegments(input: string): AnsiSegment[] | null {
+  const runs = tintLine(input);
+  if (!runs) return null;
+  return runs.map((run) => ({
+    text: run.text,
+    style: {
+      color: TINT_COLOURS[run.kind as TintKind],
+      ...(TINT_BOLD_KINDS.has(run.kind) ? { bold: true } : {}),
+    },
+  }));
+}
+
+/** Legacy `§6`/`&6` formatting, used by plugins and server messages. */
+function sectionSegments(input: string): AnsiSegment[] {
+  return parseSectionCodes(input).map((run) => ({
+    text: run.text,
+    style: {
+      ...(run.colour ? { color: run.colour } : {}),
+      ...(run.bold ? { bold: true } : {}),
+      ...(run.italic ? { italic: true } : {}),
+      ...(run.underline ? { underline: true } : {}),
+      ...(run.strike ? { strike: true } : {}),
+    },
+  }));
+}
+
 /** Splits one line into styled runs. Lines without escapes come back as a single run. */
 export function parseAnsi(input: string): AnsiSegment[] {
-  if (!input.includes(ESC) && !/\[[0-9;]*m/.test(input)) return [{ text: input, style: {} }];
+  if (!input.includes(ESC) && !/\[[0-9;]*m/.test(input)) {
+    /*
+     * No terminal escapes — which is the normal case for a server writing to a pipe. Colour the line
+     * from its structure instead of leaving the whole console grey; § codes win when present.
+     */
+    if (hasSectionCodes(input)) return sectionSegments(input);
+    return tintSegments(input) ?? [{ text: input, style: {} }];
+  }
   const segments: AnsiSegment[] = [];
   let style: AnsiStyle = {};
   let cursor = 0;

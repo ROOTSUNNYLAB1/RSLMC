@@ -44,8 +44,8 @@ dead button. Every metric, console line and player list comes from the real proc
 |---|---|
 | **11 server flavours** | Vanilla, Paper, Purpur, Spigot, Fabric, Forge, NeoForge, Quilt, Velocity, BungeeCord, Waterfall — real downloads with checksum verification where the upstream publishes one. |
 | **Java 8 – 25, managed** | Temurin JDKs downloaded, verified and pinned per server; nothing needs to be installed on the host. |
-| **12 colour themes** | Charcoal, Slate, Midnight, Ocean, Forest, Ember, Sand, Crimson, Rose, Plum, Violet, Graphite. Saved to your account, applied instantly, status colours never change meaning. |
-| **Live console** | WebSocket streaming of actual stdout with ANSI colours, command history and a typed command bar. |
+| **13 colour themes** | Charcoal, Slate, Midnight, Ocean, Forest, Ember, Sand, Crimson, Rose, Plum, Violet, Graphite and **Neobrutalism**. Saved to your account, applied instantly, status colours never change meaning. |
+| **Live console** | WebSocket streaming of actual stdout, coloured by the panel (ANSI when the server emits it, and a level/event tint when it does not — which is what a server behind a pipe gives you), command history and a typed command bar. |
 | **Players, worlds, plugins** | Player inspector (inventory, ender chest, stats), world switching, Modrinth marketplace with a real newest-first version picker. |
 | **Backups that restore** | tar.gz snapshots, verified restore, honest progress. |
 | **Files & properties** | Full file manager plus a typed `server.properties` editor where allocation-owned keys are protected. |
@@ -63,7 +63,7 @@ dead button. Every metric, console line and player list comes from the real proc
 <table>
 <tr>
 <td width="50%"><img src="docs/screenshots/login.png" alt="Sign-in screen"><br><sub><b>Sign-in</b> — two-pane layout, optional Discord/Google buttons, honest session warnings.</sub></td>
-<td width="50%"><img src="docs/screenshots/themes.png" alt="Theme picker"><br><sub><b>12 themes</b> — each swatch previews the panel; status colours stay fixed.</sub></td>
+<td width="50%"><img src="docs/screenshots/themes.png" alt="Theme picker"><br><sub><b>13 themes</b> — each swatch previews the panel; status colours stay fixed.</sub></td>
 </tr>
 <tr>
 <td><img src="docs/screenshots/dashboard-ember.png" alt="Ember theme dashboard"><br><sub><b>Ember</b> — same layout, warmer chrome.</sub></td>
@@ -79,13 +79,15 @@ dead button. Every metric, console line and player list comes from the real proc
 </tr>
 </table>
 
-### The same panel in twelve themes
+### The same panel in thirteen themes
 
-One layout, twelve palettes — the same pages, each shot with a different theme **selected on the
+One layout, thirteen palettes — the same pages, each shot with a different theme **selected on the
 account** (not injected into the page), so the chrome, the sidebar, the buttons and the theme picker
 all agree. A theme changes the chrome and nothing else: a green RUNNING badge stays green in every
 one of them. `Charcoal` is the default; `Slate` and `Graphite` are the low-chroma greys, so they shift
-the temperature rather than the hue.
+the temperature rather than the hue. `Neobrutalism` is the exception that proves the rule: same
+status colours, but square corners, 2 px outlines and a solid offset shadow instead of rounded,
+shadow-only cards — a different shape language for the same information.
 
 <table>
 <tr>
@@ -111,6 +113,10 @@ the temperature rather than the hue.
 <tr>
 <td width="50%"><img src="docs/screenshots/dashboard-graphite.png" alt="Dashboard · Graphite"><br><sub><b>Dashboard · Graphite</b> — The account dashboard with live totals and recent activity.</sub></td>
 <td width="50%"><img src="docs/screenshots/about-rose.png" alt="About · Rose"><br><sub><b>About · Rose</b> — Administration → About: build, update channel and restart history.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/dashboard-neobrutalism.png" alt="Dashboard · Neobrutalism"><br><sub><b>Dashboard · Neobrutalism</b> — same panels, same status colours: square corners, 2 px outlines, solid offset shadows, mustard chrome.</sub></td>
+<td width="50%"><img src="docs/screenshots/console-neobrutalism.png" alt="Console · Neobrutalism"><br><sub><b>Console · Neobrutalism</b> — real vanilla 1.21.4 output, coloured by the panel (level, ready line, chat, plugin prefix).</sub></td>
 </tr>
 </table>
 
@@ -264,7 +270,7 @@ file, since the relauncher starts the process outside systemd's control.)
 Everything below is an actual page in the panel — no feature is a mock button.
 
 1. **Sign in** at `/login` with `admin` / `admin123`, then go to **My Profile** and change the
-   password. Pick a **theme** on the same page while you are there: twelve palettes, saved to your
+   password. Pick a **theme** on the same page while you are there: thirteen palettes, saved to your
    account, applied instantly. A theme never changes the meaning of a status colour.
 2. **New server** (*Servers → New server*). The wizard asks for a name, then the software
    (Paper, Purpur, Fabric, Forge, NeoForge, Quilt, Vanilla, Spigot, Velocity, BungeeCord, Waterfall),
@@ -293,7 +299,7 @@ Everything below is an actual page in the panel — no feature is a mock button.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/profile-avatar.png" alt="My Profile — themes and profile picture"><br><sub><b>Step 1 · My Profile</b> — twelve themes, chosen here, plus the profile picture (Violet).</sub></td>
+<td width="50%"><img src="docs/screenshots/profile-avatar.png" alt="My Profile — themes and profile picture"><br><sub><b>Step 1 · My Profile</b> — thirteen themes, chosen here, plus the profile picture (Violet).</sub></td>
 <td width="50%"><img src="docs/screenshots/users.png" alt="Administration → Users"><br><sub><b>Step 8 · Users</b> — roles, status and per-account server allocation (Slate).</sub></td>
 </tr>
 <tr>
@@ -514,6 +520,15 @@ says so instead of pretending.
   byte is optional — capture paths that strip it (leaving `[38;2;…m`) are parsed the same way.
   Copy and log download always give clean text, and severity tinting (`ERROR`/`WARN`) is computed
   on the plain text so colour codes can never hide a failure.
+* **When the server sends no colour at all** — the normal case, because a Minecraft server only
+  emits SGR on a real terminal: vanilla 1.21.4 under Temurin 21 writes zero escape bytes to a pipe,
+  with or without `TERM` or `-Dlog4j.skipJansi=false` — the panel colours the line itself. The
+  timestamp stays quiet, the level word is blue / amber / red by meaning, the level and player names
+  are drawn at weight 600, a `WARN` or `ERROR` body carries its own colour so it can be found in a
+  6 000-line buffer, `Done (x.xxxs)!` is green, joins are green, leaves amber, lost connections red,
+  chat names and plugin prefixes (`[ViaVersion]`) get their own hue, and legacy `§a` / `&6` codes are
+  parsed as well. Everything is derived from the stored text, so copy and download still match the
+  server log byte for byte.
 
 <img src="docs/screenshots/overview-midnight.png" alt="Server overview with measured resources" width="100%">
 
@@ -930,13 +945,18 @@ Two providers, one shared code path, no browser SDK — the panel keeps `script-
 * Registration endpoints (`GET /api/auth/registration`, `POST /api/auth/register`) are public by
   design but the second one validates everything server-side: closed-state, invite code, password
   policy, reserved names, duplicate usernames/emails, and the approval switch.
-* **Twelve colour themes**, chosen in *My Profile → Appearance*: Charcoal (the original), Slate,
-  Midnight, Ocean, Forest, Ember, Sand, Crimson, Rose, Plum, Violet and Graphite. Click a swatch and
-  the whole panel re-paints instantly — sidebar, cards, borders, terminal wells, the login screen —
-  and the choice is saved **to your account**, so it follows you to any browser. A theme only ever
-  changes the chrome: status colours (green running / amber warning / red error) are deliberately
-  *not* themed, so a red panel can never make a failed server look healthy. No neon, no gradients:
-  every palette is dark, matte and low-chroma, and a unit test asserts it.
+* **Thirteen colour themes**, chosen in *My Profile → Appearance*: Charcoal (the original), Slate,
+  Midnight, Ocean, Forest, Ember, Sand, Crimson, Rose, Plum, Violet, Graphite and **Neobrutalism**.
+  Click a swatch and the whole panel re-paints instantly — sidebar, cards, borders, terminal wells,
+  the login screen — and the choice is saved **to your account**, so it follows you to any browser.
+  A theme only ever changes the chrome: status colours (green running / amber warning / red error) are
+  deliberately *not* themed, so a red panel can never make a failed server look healthy. The twelve
+  palettes are dark, matte and low-chroma — no neon, no gradients, and a unit test asserts the band.
+  **Neobrutalism** is the one theme that changes the shape language as well as the hue: square
+  corners, 2 px outlines on cards, buttons, inputs and tabs, a solid offset shadow instead of a blur,
+  a mustard accent on interactive chrome only, and no gradient edge on the summary cards. Status
+  pills, the RUNNING badge and every other semantic colour are untouched, and a stylesheet test
+  checks that the theme block never redefines `--green` or `--red`.
 * **Profile picture** on *My Profile* — upload, replace, remove, or drag a file onto the circle.
   PNG/JPEG/WebP up to 2 MB, identified by magic bytes (a renamed script is refused, not stored), and
   served back through an authenticated route with a version ETag so a new picture appears instantly.
