@@ -1,6 +1,7 @@
 import { Router, jsonError, json, ApiException } from "../shared/http";
 import { SESSION_COOKIE, validateSession, hasPermission, canAccessServer } from "../auth";
 import { rateLimit } from "../security/ratelimit";
+import { checkOrigin } from "../security/origin";
 import { buildContext } from "./context";
 import { registerAuthRoutes } from "./auth-routes";
 import { registerServerRoutes } from "./server-routes";
@@ -148,15 +149,38 @@ export async function handleApiRequest(req: Request, url: URL, clientIpValue: st
       if (!header || !ctx.session || header !== ctx.session.csrfToken) {
         return json({ error: { code: "csrf_invalid", message: "Invalid or missing CSRF token. Reload the panel and try again." } }, { status: 403 });
       }
-      const origin = req.headers.get("origin");
-      if (origin) {
-        const expected = `${url.protocol}//${url.host}`;
-        const forwardedHost = req.headers.get("x-forwarded-host");
-        const forwardedProto = req.headers.get("x-forwarded-proto");
-        const allowed = [expected, forwardedHost ? `${forwardedProto ?? "https"}://${forwardedHost}` : null].filter(Boolean);
-        if (!allowed.includes(origin)) {
-          return json({ error: { code: "origin_invalid", message: "Cross-origin request rejected" } }, { status: 403 });
-        }
+      /*
+       * Compare hosts, not whole origin strings: behind TLS termination the panel only ever sees
+       * plain HTTP from the proxy, so comparing `https://panel.example.com` with
+       * `http://panel.example.com` refused every write on a perfectly good deployment. See
+       * src/security/origin.ts for the rules; a different hostname is still refused.
+       */
+      const decision = checkOrigin({
+        origin: req.headers.get("origin"),
+        url,
+        headers: req.headers,
+        publicUrl: process.env.RSLMC_PUBLIC_URL ?? null,
+      });
+      if (!decision.allowed) {
+        // Make the refusal diagnosable instead of a bare 403: the operator can see which host was
+        // presented, which hosts the panel accepts, and whether a proxy is rewriting anything.
+        console.log(
+          `[rslmc] 403 origin_invalid ${req.method} ${url.pathname} — origin=${req.headers.get("origin")} ` +
+          `host=${req.headers.get("host")} x-forwarded-host=${req.headers.get("x-forwarded-host") ?? "-"} ` +
+          `accepted=${decision.considered.join(",") || "-"}`,
+        );
+        return json(
+          {
+            error: {
+              code: "origin_invalid",
+              message:
+                `Cross-origin request rejected: the browser sent Origin ${req.headers.get("origin")}, but this ` +
+                `panel answers on ${decision.considered.join(", ") || "an unknown host"}. If a reverse proxy or ` +
+                "tunnel sits in front of RSLMC, set RSLMC_PUBLIC_URL to the address you opened the panel on.",
+            },
+          },
+          { status: 403 },
+        );
       }
     }
 

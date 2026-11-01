@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-10-31T14:56:14.066Z",
-  "dataDir": "/tmp/rslmc-pentest-2CH8me",
-  "total": 125,
+  "generatedAt": "2026-11-01T09:05:37.067Z",
+  "dataDir": "/tmp/rslmc-pentest-xkc9Mh",
+  "total": 127,
   "failed": 0,
   "areas": [
     {
@@ -116,8 +116,8 @@
     },
     {
       "area": "CSRF",
-      "passed": 3,
-      "total": 3,
+      "passed": 5,
+      "total": 5,
       "rows": [
         {
           "id": "auth.8",
@@ -141,6 +141,22 @@
           "name": "Cross-origin mutation is rejected even with a valid token",
           "ok": true,
           "detail": "origin https://evil.example → 403",
+          "severity": "high"
+        },
+        {
+          "id": "auth.10b",
+          "area": "CSRF",
+          "name": "A foreign hostname is still refused (no suffix matching)",
+          "ok": true,
+          "detail": "origin https://panel.pentest.invalid → 403",
+          "severity": "high"
+        },
+        {
+          "id": "auth.10c",
+          "area": "CSRF",
+          "name": "A lookalike origin is refused",
+          "ok": true,
+          "detail": "→ 403",
           "severity": "high"
         }
       ]
@@ -880,7 +896,7 @@
           "area": "Updates",
           "name": "About reports a CalVer version and the update settings",
           "ok": true,
-          "detail": "2026.10.31.3 interval=360",
+          "detail": "2026.10.31.4 interval=360",
           "severity": "high"
         }
       ]

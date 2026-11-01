@@ -9,7 +9,7 @@ bun run tests/security/pentest.ts          # 125 checks, exit code 1 if any fail
 bun run tests/security/pentest.ts --json   # machine readable, also written to last-run.json
 ```
 
-Last run: **125 / 125 checks pass, 0 fail** (plus `bun test`: 30 files, 254 tests, 0 fail; `tsc --noEmit` clean).
+Last run: **127 / 127 checks pass, 0 fail** (plus `bun test`: 31 files, 265 tests, 0 fail; `tsc --noEmit` clean).
 
 ---
 
@@ -114,6 +114,28 @@ nothing from the request is ever interpolated into markup or a style attribute. 
 (8 tests) additionally asserts the palette stays dark and non-neon (accent saturation and lightness
 bands, background lightness) and that every accent clears 4:1 contrast against its own background.
 
+
+## 1e. Same-origin check behind a proxy (hardening, reported from a real deployment)
+
+Every non-GET request carries a CSRF token; the `Origin` check is the second lock. It compared whole
+origin strings against the address the panel itself received, so on any deployment where TLS ends at
+a proxy the panel saw `http://panel.example.com` while the browser sent
+`https://panel.example.com` — and *every* write came back `403 origin_invalid`. The lock was jammed,
+not doing its job.
+
+`src/security/origin.ts` now compares **hosts** (case-insensitive, default ports normalised) against
+the URL host, `X-Forwarded-Host`, and the optional `RSLMC_PUBLIC_URL`. Still refused: another
+hostname, a lookalike subdomain (no suffix matching), a different port, `null`, and unparsable
+origins — all covered by `tests/origin.test.ts` (11 cases). A rejection is now diagnosable: the
+response names the origin it received and the hosts it accepts, and the same line is written to the
+panel log.
+
+Related, also from that deployment: a `403` produced by Cloudflare or nginx (HTML block page, `cf-ray`
+header, no `x-rslmc-version`) is reported in the UI as an edge refusal with the method and path to
+allow, instead of the misleading "Request failed with HTTP 403" that sends an operator hunting for a
+permission problem inside the panel. The CSP stays `script-src 'self'`; a proxy that injects
+Cloudflare Web Analytics is blocked by design, and `RSLMC_CSP_SCRIPT_SRC` is an explicit, logged
+opt-in for operators who want that script anyway.
 
 ---
 

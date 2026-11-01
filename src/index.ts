@@ -86,9 +86,43 @@ function applySecurityHeaders(response: Response, opts: { document?: boolean } =
   return response;
 }
 
+/**
+ * Extra script origins, opt-in only.
+ *
+ * The panel ships a strict `script-src 'self'`. A proxy that rewrites the HTML — Cloudflare's Web
+ * Analytics injects `static.cloudflareinsights.com/beacon.min.js` at the edge — is then blocked by
+ * design, and the browser logs a CSP violation while the panel itself works fine. The right fix is
+ * to turn that injection off, but an operator who wants it can list the origin explicitly:
+ *
+ *   RSLMC_CSP_SCRIPT_SRC=https://static.cloudflareinsights.com
+ *
+ * Nothing is allowed by default, the value is validated as an origin list, and boot logs a warning
+ * so nobody widens the policy by accident.
+ */
+function scriptSrcOrigins(): string {
+  const raw = (process.env.RSLMC_CSP_SCRIPT_SRC ?? "").trim();
+  if (!raw) return "";
+  const accepted: string[] = [];
+  for (const candidate of raw.split(",").map((value) => value.trim()).filter(Boolean)) {
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") continue;
+      accepted.push(candidate.replace(/\/+$/, ""));
+    } catch {
+      console.log(`[rslmc] ignoring RSLMC_CSP_SCRIPT_SRC entry that is not a URL: ${candidate}`);
+    }
+  }
+  if (accepted.length === 0) return "";
+  console.log(
+    `[rslmc] CSP widened for script-src: ${accepted.join(", ")} — every script from these origins may run ` +
+    "in the panel. Prefer disabling the proxy's script injection instead.",
+  );
+  return ` ${accepted.join(" ")}`;
+}
+
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self'",
+  `script-src 'self'${scriptSrcOrigins()}`,
   // React sets style attributes; the bundled CSS is a file.
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",

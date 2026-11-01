@@ -825,6 +825,26 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
   reloading into a 401 loop.
 * Reverse proxy: forward `Host`, `X-Forwarded-For` and `X-Forwarded-Proto`, and keep the panel on
   `RSLMC_HOST=127.0.0.1` when it should not be reachable directly.
+* **Writes behind TLS termination.** Every non-GET request is checked for a matching `Origin` on top
+  of the CSRF token. That check now compares **hosts, not whole origins**: the panel only ever sees
+  plain `http://` from a proxy, so the old string comparison answered `403 origin_invalid` to every
+  save, start and settings change on an otherwise perfect nginx/Caddy/Cloudflare deployment. A
+  different hostname (including lookalike subdomains), a `null` origin, or a different port is still
+  refused, and a rejection now names the origin it saw, the hosts the panel accepts, and suggests
+  `RSLMC_PUBLIC_URL` if a proxy is hiding the real address (the same line goes to the panel log).
+* **`RSLMC_PUBLIC_URL=https://panel.example.com`** is the explicit answer for tunnels that rewrite
+  both `Host` and `X-Forwarded-Host`. It is only used for the origin comparison.
+* **Cloudflare's injected beacon.** If the browser console shows
+  `Loading the script 'https://static.cloudflareinsights.com/beacon.min.js' violates … "script-src 'self'"`,
+  that is Cloudflare Web Analytics rewriting the HTML at the edge — the panel's CSP is doing its job
+  and blocking a third-party script it never asked for. Nothing in the panel is broken. Either turn
+  the injection off (Cloudflare → Web Analytics), or allow that one origin explicitly:
+  `RSLMC_CSP_SCRIPT_SRC=https://static.cloudflareinsights.com` — validated as a URL list, empty by
+  default, and printed as a warning at boot so the policy is never widened silently.
+* **A 403 that did not come from RSLMC says so.** Panel errors are JSON and carry
+  `x-rslmc-version`; anything else (an HTML block page, a `cf-ray` header) is reported in the UI as
+  *"Cloudflare refused this request before RSLMC saw it — this is not a panel permission error"*,
+  with the method and path to allow, instead of the old misleading "HTTP 403".
 
 ### Security
 

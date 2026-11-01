@@ -59,6 +59,24 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
     if (contentType.includes("application/json")) {
       try { payload = await response.json(); } catch { /* ignore */ }
     }
+    /*
+     * Every error the panel itself produces is JSON with an `error.code` and carries the
+     * `x-rslmc-version` header. A failure that has neither did not come from RSLMC: it came from
+     * something in front of it — Cloudflare's WAF or Bot Fight Mode, an nginx `deny`, a tunnel that
+     * blocks XHR — and saying "Request failed with HTTP 403" sends the operator hunting inside the
+     * panel for a permission problem that does not exist.
+     */
+    const fromPanel = Boolean(payload.error?.code) || Boolean(stamped);
+    if (!fromPanel && response.status >= 400) {
+      const edge = response.headers.get("cf-ray") ? "Cloudflare" : "a proxy in front of the panel";
+      throw new ApiError(
+        response.status,
+        "edge_blocked",
+        `${edge} refused this request (HTTP ${response.status}) before RSLMC saw it — ` +
+        "this is not a panel permission error. Check the proxy's WAF, bot-protection and rate limits for " +
+        `this host, and allow ${method} ${path}.`,
+      );
+    }
     throw new ApiError(
       response.status,
       payload.error?.code ?? "request_failed",
