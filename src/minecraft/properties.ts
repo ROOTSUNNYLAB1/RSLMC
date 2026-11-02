@@ -135,6 +135,28 @@ export function normalisePropertyValue(key: string, value: string): string {
   return trimmed;
 }
 
+/**
+ * A world folder name: exactly one path segment.
+ *
+ * `level-name` ends up in `join(serverDir, levelName, …)` in four places (world detection, player
+ * data, backups, world delete). Vanilla itself will happily accept `level-name=../../other-server`,
+ * and the properties editor is a plain value map — so anything that is not a single safe segment is
+ * treated as the default `world` instead of being joined onto a path. `/`, `\\`, `:` (drive
+ * letters), NUL, `.`/`..` and leading dots are all rejected.
+ */
+export const LEVEL_NAME_PATTERN = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$/;
+
+export function isSafeLevelName(name: string): boolean {
+  return typeof name === "string" && !name.includes("..") && LEVEL_NAME_PATTERN.test(name);
+}
+
+/** Reads `level-name` from a parsed properties map, falling back to `world` when it is unsafe. */
+export function levelNameOf(properties: Record<string, string>): string {
+  const value = (properties["level-name"] ?? "").trim();
+  if (!value) return "world";
+  return isSafeLevelName(value) ? value : "world";
+}
+
 /** A datapack generator id (`terralith:overworld`) is a valid enum value even when it is not listed. */
 export function isNamespacedId(value: string): boolean {
   return /^[a-z0-9_.-]+:[a-z0-9_./-]+$/i.test(value.trim());
@@ -205,6 +227,9 @@ export function writeProperties(directory: string, patch: PropertyPatch, reserve
         if (spec.max !== undefined && num > spec.max) throw new Error(`${spec.label} must be at most ${spec.max}`);
       }
       if (spec.type === "boolean" && !["true", "false"].includes(value)) throw new Error(`${spec.label} must be true or false`);
+      if (key === "level-name" && !isSafeLevelName(value.trim())) {
+        throw new Error("World folder must be a single folder name (letters, numbers, - and _, up to 64 characters) — no slashes or ..");
+      }
       if (spec.type === "enum" && spec.options && !spec.options.includes(value)) {
         // Datapack world generators (`terralith:overworld`) are legitimate values the curated list
         // cannot know about; anything else is a real mistake.

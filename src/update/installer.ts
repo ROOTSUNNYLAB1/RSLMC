@@ -68,9 +68,15 @@ const STEPS: Array<{ id: string; label: string }> = [
   { id: "finish", label: "Ready to restart" },
 ];
 
-/** Never replaced by an update: data, dependencies, VCS metadata, local configuration. */
+/**
+ * Never replaced by an update: data, dependencies, VCS metadata, local configuration — and the
+ * installer's own files. `.rslmc-install` records where the data directory and env file live and is
+ * read by the next `install.sh` run as root, and `rslmc-ctl` is executed by it, so neither may be
+ * swapped by a code update that only touches `src/`.
+ */
 const PROTECTED_TOP_LEVEL = new Set([
   "node_modules", "runtime", ".git", ".env", "public", "data", "restart.log", ".rslmc-tmp",
+  ".rslmc-install", "rslmc-ctl", "install.sh",
 ]);
 
 function freshSteps(): InstallStep[] {
@@ -163,18 +169,63 @@ function skip(steps: InstallStep[], id: string, jobId: number, detail: string): 
  * `RSLMC_ALLOW_INSECURE_UPDATE_FEED=1` — that is what the test suite uses to exercise the whole
  * install flow against a local fake release server. Anything else must be HTTPS.
  */
+const insecureFeed = (): boolean => process.env.RSLMC_ALLOW_INSECURE_UPDATE_FEED === "1";
+
+/**
+ * Where a release archive may come from.
+ *
+ * The updater replaces the panel's own code, so "any HTTPS host" was too wide: `redirect: "follow"`
+ * also meant a URL that passed this check could bounce to `http://` or to an internal address
+ * without anyone looking at the second hop. Both ends are pinned now — the URL *and* every redirect
+ * the server hands back (see `fetchRelease`).
+ */
+const RELEASE_HOSTS = [
+  /^(?:www\.)?github\.com$/,
+  /^api\.github\.com$/,
+  /^codeload\.github\.com$/,
+  /^objects\.githubusercontent\.com$/,
+  /^release-assets\.githubusercontent\.com$/,
+  /^raw\.githubusercontent\.com$/,
+  /^github-releases\.githubusercontent\.com$/,
+];
+
 function assertReleaseUrl(raw: string): URL {
   let url: URL;
   try { url = new URL(raw); } catch { throw new ApiException(400, "invalid_url", "The release asset URL is malformed."); }
   const loopback = ["127.0.0.1", "::1", "localhost"].includes(url.hostname);
-  if (url.protocol === "https:") return url;
-  if (url.protocol === "http:" && loopback && process.env.RSLMC_ALLOW_INSECURE_UPDATE_FEED === "1") return url;
+  if (url.protocol === "https:") {
+    if (insecureFeed()) return url;                       // test/air-gapped mode
+    if (!RELEASE_HOSTS.some((pattern) => pattern.test(url.hostname.toLowerCase()))) {
+      throw new ApiException(400, "untrusted_release_host", `Refusing to download an update from ${url.hostname} — release assets are only fetched from GitHub.`);
+    }
+    return url;
+  }
+  if (url.protocol === "http:" && loopback && insecureFeed()) return url;
   throw new ApiException(400, "insecure_url", "The release asset must be served over HTTPS.");
 }
 
+/**
+ * `fetch` that follows redirects by hand, re-validating scheme and host on every hop.
+ * Native `redirect: "follow"` would apply the check to the first URL only.
+ */
+async function fetchRelease(raw: string, init: RequestInit, maxHops = 4): Promise<Response> {
+  let current = assertReleaseUrl(raw).toString();
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const response = await fetch(current, { ...init, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) throw new ApiException(400, "release_redirect", `The release server (${new URL(current).hostname}) redirected without a location.`);
+      current = new URL(location, current).toString();
+      assertReleaseUrl(current);                              // throws on an untrusted hop
+      continue;
+    }
+    return response;
+  }
+  throw new ApiException(400, "release_redirect", "The release server redirected too many times.");
+}
+
 async function downloadArchive(url: string, destination: string, onProgress: (received: number, total: number) => void): Promise<{ bytes: number; sha256: string }> {
-  const parsed = assertReleaseUrl(url);
-  const response = await fetch(parsed, { headers: { "user-agent": "RSLMC-panel-updater" }, signal: AbortSignal.timeout(180_000) });
+  const response = await fetchRelease(url, { headers: { "user-agent": "RSLMC-panel-updater" }, signal: AbortSignal.timeout(180_000) });
   if (!response.ok || !response.body) throw new Error(`the release server replied HTTP ${response.status}`);
   const total = Number(response.headers.get("content-length") ?? 0);
   mkdirSync(dirname(destination), { recursive: true });
@@ -197,18 +248,52 @@ async function downloadArchive(url: string, destination: string, onProgress: (re
   return { bytes: data.length, sha256: hash.digest("hex") };
 }
 
-async function fetchChecksum(url: string): Promise<string | null> {
+type ChecksumResult =
+  | { ok: true; sha256: string; entry: string }
+  | { ok: false; reason: string };
+
+/**
+ * Reads a `SHA256SUMS` file and returns the hash **for this asset's filename**.
+ *
+ * Two things used to be wrong here. The parse took the first hash in the file, whatever file it
+ * belonged to, so a release that shipped several archives could hand us the wrong one; and `null`
+ * meant "no checksum available", which the caller treated as "skip the check". A release can be
+ * edited after publication, so an unverifiable archive must never be installed — every failure path
+ * below is a refusal, with the reason stated in the job's step list.
+ */
+async function fetchChecksum(url: string, fileName: string): Promise<ChecksumResult> {
+  let text: string;
   try {
-    const parsed = assertReleaseUrl(url);
-    const response = await fetch(parsed, { headers: { "user-agent": "RSLMC-panel-updater" }, signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) return null;
-    const text = (await response.text()).trim();
-    // Accept "<sha256>  filename" (sha256sum), a bare hash, or "<sha256> *file".
-    const match = /^([a-f0-9]{64})\b/i.exec(text);
-    return match ? match[1]!.toLowerCase() : null;
-  } catch {
-    return null;
+    const response = await fetchRelease(url, { headers: { "user-agent": "RSLMC-panel-updater" }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) return { ok: false, reason: `the checksum file answered HTTP ${response.status}` };
+    text = await response.text();
+  } catch (error) {
+    return { ok: false, reason: `the checksum file could not be downloaded (${error instanceof Error ? error.message : String(error)})` };
   }
+
+  const wanted = fileName.trim().toLowerCase();
+  const entries: Array<{ sha256: string; name: string | null }> = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    // sha256sum: "<hash>  <name>" / "<hash> *<name>"; also accept a bare hash line.
+    const match = /^([a-f0-9]{64})(?:\s+\*?(.+))?$/i.exec(line);
+    if (!match) continue;
+    const name = match[2]?.trim() ?? null;
+    entries.push({ sha256: match[1]!.toLowerCase(), name: name ? name.split("/").pop()!.toLowerCase() : null });
+  }
+  if (entries.length === 0) return { ok: false, reason: "the checksum file contains no SHA-256 line" };
+
+  const named = entries.find((entry) => entry.name === wanted);
+  if (named) return { ok: true, sha256: named.sha256, entry: named.name! };
+  // A file that only carries hashes (no filenames) is usable when it lists exactly one.
+  if (entries.length === 1 && entries[0]!.name === null) {
+    return { ok: true, sha256: entries[0]!.sha256, entry: "(single hash)" };
+  }
+  return {
+    ok: false,
+    reason: `the checksum file lists ${entries.map((entry) => entry.name ?? "(unnamed)").join(", ")}, none of which is ${fileName}`,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -384,19 +469,20 @@ async function runInstall(jobId: number, version: string, actor: string, targetR
     /* 4 — checksum ------------------------------------------------------- */
     begin(steps, "checksum", jobId);
     const checksumAssetRef = checksumAsset(release);
-    if (checksumAssetRef) {
-      const expectedHash = await fetchChecksum(checksumAssetRef.url);
-      if (!expectedHash) {
-        skip(steps, "checksum", jobId, `${checksumAssetRef.name} could not be read; integrity was checked by unpacking the archive instead.`);
-      } else if (expectedHash !== downloaded.sha256) {
-        fail("checksum", `SHA-256 mismatch — the archive does not match ${checksumAssetRef.name}. The download was discarded and nothing was installed.`);
-        return;
-      } else {
-        succeed(steps, "checksum", jobId, `SHA-256 ${downloaded.sha256.slice(0, 16)}… matches ${checksumAssetRef.name}`);
-      }
-    } else {
-      skip(steps, "checksum", jobId, "This release publishes no checksum file; the archive is validated by unpacking and checking the build instead.");
+    if (!checksumAssetRef) {
+      fail("checksum", "This release publishes no checksum file, so its archive cannot be authenticated. Nothing was installed — publish SHA256SUMS with the release, or update manually.");
+      return;
     }
+    const verified = await fetchChecksum(checksumAssetRef.url, asset!.name);
+    if (!verified.ok) {
+      fail("checksum", `${checksumAssetRef.name} could not be verified: ${verified.reason}. Nothing was installed.`);
+      return;
+    }
+    if (verified.sha256 !== downloaded.sha256) {
+      fail("checksum", `SHA-256 mismatch — the archive does not match the entry for ${verified.entry} in ${checksumAssetRef.name}. The download was discarded and nothing was installed.`);
+      return;
+    }
+    succeed(steps, "checksum", jobId, `SHA-256 ${downloaded.sha256.slice(0, 16)}… matches ${checksumAssetRef.name} (${verified.entry})`);
 
     /* 5 — extract -------------------------------------------------------- */
     begin(steps, "extract", jobId);

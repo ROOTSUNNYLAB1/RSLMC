@@ -41,7 +41,8 @@ type About = {
     mode: string; port: number; bun: string; platform: string; arch: string; pid: number;
     uptimeSeconds: number; startedAt: string; routes: number; cpuCores: number; memoryTotalBytes: number;
   };
-  paths: { root: string; data: string; dataSource: string; dataNote: string | null; database: string; backups: string };
+  /** `null` for accounts without `system.manage`: absolute host paths are admin-only. */
+  paths: { root: string; data: string; dataSource: string; dataNote: string | null; database: string; backups: string } | null;
   enforcement: { memory: { level: string; mechanism: string }; cpu: { level: string; mechanism: string }; disk: { level: string; mechanism: string } };
   disk: { usedBytes: number; freeBytes: number; totalBytes: number };
   update: {
@@ -369,7 +370,7 @@ export function AboutPage() {
           </div>
           <div className="about-mini">
             <span className="k">Data</span>
-            <span className="v">{data.paths.dataSource === "env" ? "custom" : "default"}</span>
+            <span className="v">{data.paths ? (data.paths.dataSource === "env" ? "custom" : "default") : "hidden"}</span>
             <span className="s">{formatBytes(data.disk.freeBytes)} free</span>
           </div>
         </div>
@@ -564,8 +565,8 @@ export function AboutPage() {
               console, files, players, worlds, backups and schedules in one browser tab.
             </p>
             <p className="about-note muted">
-              Data folder <span className="mono">{data.paths.data}</span> — the database, server
-              directories, backups, Java runtimes and logs all live inside it; source: {data.paths.dataSource}).
+              Data folder <span className="mono">{data.paths?.data ?? "configured on the host"}</span> — the database, server
+              directories, backups, Java runtimes and logs all live inside it; source: {data.paths?.dataSource ?? "hidden for your role"}).
               One process, SQLite, MIT licence. Not affiliated with Mojang, Microsoft or Pterodactyl.
             </p>
             <div className="about-repo-stats">
@@ -630,7 +631,7 @@ export function AboutPage() {
         </Card>
 
         <Card title="Where everything lives" icon={<FolderTree size={12} />}>
-          <InfoList rows={[
+          <InfoList rows={data.paths ? [
             { key: "Code", value: <CopyValue value={data.paths.root} mono /> },
             { key: "Data", value: <CopyValue value={data.paths.data} mono /> },
             { key: "Data source", value: data.paths.dataSource },
@@ -647,8 +648,11 @@ export function AboutPage() {
                 </span>
               ),
             },
+          ] : [
+            { key: "Paths", value: "Hidden — absolute host paths are shown to administrators only." },
+            { key: "Disk", value: `${formatBytes(data.disk.usedBytes)} used · ${formatBytes(data.disk.freeBytes)} free of ${formatBytes(data.disk.totalBytes)}` },
           ]} />
-          {data.paths.dataNote ? <p className="about-note muted" style={{ marginTop: 10 }}>{data.paths.dataNote}</p> : null}
+          {data.paths?.dataNote ? <p className="about-note muted" style={{ marginTop: 10 }}>{data.paths.dataNote}</p> : null}
         </Card>
       </div>
 

@@ -35,15 +35,27 @@ describe("self-registration", () => {
     expect(JSON.stringify(info)).not.toContain("inviteCode");
   });
 
+  test("an admin-capable role cannot be the sign-up default", () => {
+    /*
+     * Self-registration is a public endpoint. Pointing it at Server Manager (server creation,
+     * allocations, node list) would have published accounts that can reach the administration area —
+     * the setting used to accept any role name.
+     */
+    expect(() => register.writeRegistrationConfig({ defaultRole: "Server Manager" })).toThrow(/administration area/i);
+    expect(() => register.writeRegistrationConfig({ defaultRole: "Moderator" })).toThrow(/administration area/i);
+    const config = register.readRegistrationConfig();
+    expect(config.defaultRole).toBe("User");
+  });
+
   test("creates an account with the configured default role", async () => {
-    register.writeRegistrationConfig({ enabled: true, defaultRole: "Server Manager" });
+    register.writeRegistrationConfig({ enabled: true, defaultRole: "User" });
     const created = await register.registerAccount({ username: "builder", password: PASSWORD, ip: "10.0.0.1" });
-    expect(created.role).toBe("Server Manager");
+    expect(created.role).toBe("User");
     const user = users.findUserByUsername("builder")!;
     expect(user.disabled).toBe(0);
     expect(user.is_root).toBe(0);
     expect(user.password_hash).not.toContain(PASSWORD);
-    expect(users.rolesForUser(user.id)).toEqual(["Server Manager"]);
+    expect(users.rolesForUser(user.id)).toEqual(["User"]);
   });
 
   test("rejects weak passwords, reserved and duplicate usernames", async () => {

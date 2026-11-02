@@ -11,8 +11,8 @@
  */
 import { gzipSync, gunzipSync, inflateRawSync } from "node:zlib";
 import {
-  chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, readFileSync, readdirSync, rmSync,
-  statSync, symlinkSync, writeFileSync,
+  chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readFileSync, readdirSync,
+  rmSync, statSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { tmpdir } from "node:os";
@@ -71,12 +71,55 @@ export function safeArchiveEntry(entry: string): string {
   return parts.join("/");
 }
 
+/**
+ * Decompresses a gzip stream with a hard ceiling.
+ *
+ * `gunzipSync(raw)` inflated the entire archive into memory *before* `ExtractBudget` ever ran, so a
+ * 1 MB gzip of zeroes could exhaust the panel's heap before the first entry was looked at — the
+ * budget only limited what was written to disk. `maxOutputLength` makes the zlib call itself stop at
+ * the same documented ceiling (`RSLMC_EXTRACT_MAX_MB`).
+ */
+function gunzipBounded(raw: Buffer): Buffer {
+  try {
+    return gunzipSync(raw, { maxOutputLength: EXTRACT_MAX_BYTES });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/buffer|length/i.test(message)) {
+      throw new Error(
+        `That archive expands beyond the ${Math.round(EXTRACT_MAX_BYTES / 1024 / 1024)} MB limit and was not extracted. `
+        + "Raise RSLMC_EXTRACT_MAX_MB if the file is genuinely that large.",
+      );
+    }
+    throw error;
+  }
+}
+
 function resolveInside(root: string, entry: string): string {
   const clean = safeArchiveEntry(entry);
   const full = normalize(join(root, clean));
   const normalizedRoot = normalize(root);
   if (full !== normalizedRoot && !full.startsWith(normalizedRoot + sep)) {
     throw new Error(`Archive entry escapes the destination: ${entry.slice(0, 120)}`);
+  }
+  /*
+   * The check above is a string check. An archive cannot create a symlink here (links are skipped),
+   * but the *destination* can already contain one — a plugin, or an earlier upload, may have left
+   * `plugins/report -> /etc`. Writing through it would land outside the directory. Any existing
+   * component that is a link is therefore refused, and the final path is realpath-ed when it exists.
+   */
+  const relativeParts = clean.split("/").filter(Boolean);
+  let walk = normalizedRoot;
+  for (const part of relativeParts) {
+    walk = join(walk, part);
+    try {
+      if (lstatSync(walk).isSymbolicLink()) {
+        throw new Error(`Archive entry would be written through a symbolic link: ${entry.slice(0, 120)}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("symbolic link")) throw error;
+      // NotFound is expected for the parts the archive is about to create.
+      break;
+    }
   }
   return full;
 }
@@ -267,7 +310,7 @@ function applyMode(target: string, rawMode: number): void {
 export function extractTarGz(archivePath: string, destination: string): ExtractResult {
   const raw = readFileSync(archivePath);
   // Gzip magic keeps us from guessing wrong when a plain .tar is passed.
-  const buffer = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw;
+  const buffer = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipBounded(raw) : raw;
 
   mkdirSync(destination, { recursive: true });
   const result: ExtractResult = { files: 0, directories: 0, entries: [] };
@@ -711,7 +754,7 @@ export function listArchive(archivePath: string): string[] {
     }
   }
   const raw = readFileSync(archivePath);
-  const buffer = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipSync(raw) : raw;
+  const buffer = raw[0] === 0x1f && raw[1] === 0x8b ? gunzipBounded(raw) : raw;
   const names: string[] = [];
   let offset = 0;
   let longName: string | null = null;

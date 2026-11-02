@@ -1049,15 +1049,17 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (28 files, 237 tests)
-bun run tests/security/pentest.ts     # 125 adversarial checks against a throwaway instance
+bun run test                          # every suite, one process per file (31 files, 265 tests)
+bun run tests/security/pentest.ts     # 140 adversarial checks against a throwaway instance
 bun run typecheck                     # tsc --noEmit, strict
 ```
 
 The security harness boots its own panel on port 3941 with a temporary data directory, seeds two
 plain users and two servers, and then attacks it like an untrusted client would — IDOR on schedules,
-privilege escalation through user management, CSRF, forged cookies, open redirects on the OAuth
-callback, state replay, profile-picture polyglots, theme id injection, compression bombs, and more.
+privilege escalation through user management and role editing, CSRF, forged cookies, open redirects on
+the OAuth callback, state replay, profile-picture polyglots, theme id injection, compression bombs,
+filename traversal on uploads, `level-name` traversal, symlink writes, the node proxy's permission
+map, sandboxing of renderer output, and more.
 It exits non-zero when anything fails, so it can gate a release. Every finding so far, and the exact
 fix, is written up in **[SECURITY.md](SECURITY.md)**.
 

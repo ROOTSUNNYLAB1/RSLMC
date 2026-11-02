@@ -89,7 +89,10 @@ export async function bootstrap(): Promise<void> {
       result: "success",
       metadata: { mode: MODE, dataDir: PATHS.data, version: APP_VERSION },
     });
-    console.log("[rslmc] Bootstrap administrator created. Change the password after first login.");
+    console.log(
+      "[rslmc] Bootstrap administrator created (admin / admin123). RSLMC does not force a password change — " +
+      "set a new one in My Profile before this panel is reachable from anywhere but localhost.",
+    );
   }
 
   // Clean expired sessions on boot.

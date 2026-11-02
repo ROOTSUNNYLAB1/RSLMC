@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { query, queryOne, run, insert } from "../database";
 import { createBackup } from "../services/backups";
 import { readWorldSeed } from "./nbt";
-import { readProperties } from "./properties";
+import { readProperties, levelNameOf, isSafeLevelName } from "./properties";
 import { directorySizeSync } from "../resources/host";
 import { ApiException } from "../shared/http";
 import { serverDir } from "../shared/config";
@@ -28,7 +28,8 @@ interface DetectedWorld {
 export function detectWorlds(directory: string): DetectedWorld[] {
   if (!existsSync(directory)) return [];
   const properties = readProperties(directory);
-  const mainWorld = properties.values["level-name"] || "world";
+  // Never joined onto a path unless it is a single safe segment (see isSafeLevelName).
+  const mainWorld = levelNameOf(properties.values);
   const out: DetectedWorld[] = [];
 
   const candidates = new Set<string>();
@@ -89,7 +90,8 @@ export function rediscoverWorlds(serverId: number): WorldRecord[] {
     );
   }
   const properties = readProperties(directory);
-  const mainWorld = properties.values["level-name"] || "world";
+  // Never joined onto a path unless it is a single safe segment (see isSafeLevelName).
+  const mainWorld = levelNameOf(properties.values);
   const main = queryOne<{ id: number; protected: number }>("SELECT id, protected FROM worlds WHERE server_id = ? AND folder = ?", [serverId, mainWorld]);
   if (main && main.protected === 0) run("UPDATE worlds SET protected = 1 WHERE id = ?", [main.id]);
 
@@ -128,6 +130,9 @@ export function deleteWorld(serverId: number, worldId: number, opts: { confirmNa
   if (row.protected === 1) throw new ApiException(409, "world_protected", "The primary world is protected. Disable protection explicitly before deleting it.");
   if (opts.confirmName !== row.folder) throw new ApiException(400, "confirm_mismatch", `Type "${row.folder}" to confirm deletion`);
   const server = queryOne<{ uuid: string }>("SELECT uuid FROM servers WHERE id = ?", [serverId])!;
+  if (!isSafeLevelName(row.folder)) {
+    throw new ApiException(400, "invalid_world", `“${row.folder}” is not a valid world folder name, so RSLMC will not touch it.`);
+  }
   const path = join(serverDir(server.uuid), row.folder);
   if (opts.backupFirst) {
     createBackup(serverId, { name: `pre-delete-${row.folder}`, kind: "worlds", description: `Automatic backup before deleting ${row.folder}` });
@@ -144,6 +149,9 @@ export function renameWorld(serverId: number, worldId: number, newFolder: string
   const server = queryOne<{ uuid: string }>("SELECT uuid FROM servers WHERE id = ?", [serverId])!;
   const base = serverDir(server.uuid);
   if (existsSync(join(base, newFolder))) throw new ApiException(409, "exists", "A folder with that name already exists");
+  if (!isSafeLevelName(row.folder)) {
+    throw new ApiException(400, "invalid_world", `“${row.folder}” is not a valid world folder name, so RSLMC will not rename it.`);
+  }
   renameSync(join(base, row.folder), join(base, newFolder));
   run("UPDATE worlds SET folder = ?, name = ? WHERE id = ?", [newFolder, newFolder, worldId]);
 }

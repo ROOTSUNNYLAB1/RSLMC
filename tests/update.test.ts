@@ -21,7 +21,8 @@ const BUILD_DIR = mkdtempSync(join(tmpdir(), "rslmc-build-"));
 process.env.RSLMC_DATA_DIR = DATA_DIR;
 process.env.RSLMC_ALLOW_INSECURE_UPDATE_FEED = "1";
 
-const TARGET_VERSION = "2026.11.02";
+// A CalVer newer than this build, so the fixture always looks like an available upgrade.
+const TARGET_VERSION = "2026.11.20";
 
 interface FakeRelease {
   tag: string;

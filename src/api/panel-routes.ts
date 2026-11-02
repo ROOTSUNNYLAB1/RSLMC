@@ -102,14 +102,19 @@ export function aboutPayload(user: any) {
       cpuCores: stats.cpuCores,
       memoryTotalBytes: stats.memoryTotalBytes,
     },
-    paths: {
+    /*
+     * Absolute filesystem paths are shown to administrators only. They describe the host's layout,
+     * which is useful when an operator reads a bug report and is reconnaissance for anyone else.
+     * `paths: null` is what Account/About render as "hidden for your role".
+     */
+    paths: canManage(user) ? {
       root: ROOT_DIR,
       data: PATHS.data,
       dataSource: DATA_LOCATION.source,
       dataNote: DATA_LOCATION.note,
       database: PATHS.dbFile,
       backups: PATHS.backups,
-    },
+    } : null,
     enforcement: describeEnforcement(cgroups),
     disk: { usedBytes: disk.usedBytes, freeBytes: disk.freeBytes, totalBytes: disk.totalBytes },
     update: {

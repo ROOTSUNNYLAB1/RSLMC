@@ -23,6 +23,7 @@
  */
 
 import { createServer, type Socket } from "node:net";
+import { timingSafeEqual } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -162,7 +163,15 @@ function main(): void {
         let message: any;
         try { message = JSON.parse(raw); } catch { socket.destroy(); return; }
         if (!authenticated) {
-          if (message?.type !== "hello" || message?.token !== plan.token) { socket.destroy(); return; }
+          /*
+           * Constant-time compare: the token is the relay's only credential and it lives for the
+           * whole life of the process, so a byte-by-byte `!==` is a comparison an attacker can time.
+           */
+          if (message?.type !== "hello" || typeof message?.token !== "string"
+            || !timingSafeEqual(Buffer.from(String(message.token)), Buffer.from(plan.token))) {
+            socket.destroy();
+            return;
+          }
           authenticated = true;
           client = socket;
           const since = Number(message.since ?? 0);

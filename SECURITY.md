@@ -139,6 +139,73 @@ opt-in for operators who want that script anyway.
 
 ---
 
+## 1f. External review, 2 November 2026 (K1, H1–H9, M1–M14, L1–L12)
+
+An independent review of `2b99ac7` reported one critical, nine high, fourteen medium and twelve low
+findings. This round fixed every critical and high finding, and the medium/low findings that are
+reachable from the HTTP surface. Each fix has a check in `tests/security/pentest.ts`
+(`audit.*`) or in the unit suites, so it cannot quietly regress.
+
+**Fixed**
+
+| ID | What was wrong | What it is now |
+|---|---|---|
+| K1 | `extract=true` uploads built the temp path from the multipart `filename`, so `filename="/../../victim/pwned"` wrote outside the temp folder | temp path is `randomUUID()` + a whitelisted extension; cleaned up in `finally` |
+| H1 | `assertCanGrantRoles` returned early for an unknown role name, and the caller skipped that name — `["Administrator","ghost"]` granted Administrator to a plain `user.manage` holder | unknown names are a `400`; one resolution path (`resolveRoleIds`) for create *and* patch |
+| H2 | `level-name` was joined onto the server directory in four places | `isSafeLevelName` (single segment, no `..`) enforced on write and used at every read site; world folder names validated before `rename`/`rm` |
+| H3 | A `role.manage` holder could add any permission to a role it already had | `assertCanWritePermissions`: you cannot write a permission you do not hold |
+| H4 | `DELETE /api/users/:id` skipped the root guard that PATCH and password reset enforce | root accounts are only deletable by a root administrator |
+| H5 | `registration.defaultRole` accepted `Administrator` | refused when the role grants anything from `DANGEROUS_PERMISSIONS`; the least-privilege fallback also skips such roles |
+| H6 | The node proxy mapped unlisted writes to `server.view`, decided `/power` from the URL, and skipped the Origin check | explicit table, deny-by-default for unlisted writes, body-aware power action, Origin check and rate limit applied to forwarded writes |
+| H7 | `/api/servers/:id/map/web/*` served user-written HTML on the panel origin — stored XSS with the viewer's session | served with `Content-Security-Policy: sandbox` (opaque origin, no `allow-same-origin`), `X-Frame-Options: SAMEORIGIN` so the Map page can embed it, and the iframe repeats the sandbox |
+| H8 | The updater skipped verification when the checksum file was missing or unreadable, and used the first hash in the file | fail closed, hash matched **by asset name**, four redirect hops re-validated against a GitHub-only host list |
+| H9 | `install.sh` sourced `.rslmc-install` from a service-writable directory and executed `rslmc-ctl` from it as root | state file is parsed (four known keys, absolute paths only, `.env` suffix), never sourced; the control script is installed root-owned in `/usr/local/sbin`; the updater never replaces `.rslmc-install`, `rslmc-ctl` or `install.sh` |
+| M2 | An OAuth callback with **no** state cookie skipped the comparison (login CSRF) | both halves required |
+| M3 | A WebSocket kept the permissions it was opened with, and stayed open after the account was disabled | session re-validated on every message and every heartbeat; socket closed on revocation |
+| M4 | `/api/agent/*` had no permission check | controller-only (`nodeControllerUser`), everything else `403` |
+| M5 | `POST /api/auth/totp/setup` disabled an existing second factor with no password | current password required when 2FA is already on |
+| M6 | `-XX:MaxHeapSize` / `-XX:MaxRAMPercentage` in `jvmArgs` overrode the panel's `-Xmx` | refused in both create and update, like `-Xms`/`-Xmx` already were |
+| M7 | `gunzipSync` inflated the whole archive before the extraction budget ran | bounded decompression at the documented `RSLMC_EXTRACT_MAX_MB` ceiling |
+| M8 | Extraction wrote through a pre-existing symlink; `resolveServerPath` followed *dangling* links | links inside the destination are refused; dangling links cannot be written through |
+| M9 | `--path /opt/../etc` bypassed the deny-list and reached `chown -R`/`mv`/`rm -rf` as root | both paths canonicalised first; `/`, `/etc`, `/usr/*`, `/var/*` … refused for the install path, `/` refused for the data folder, install path inside the data folder refused |
+| M11 | An unreachable `SHASUMS256.txt` for Bun warned and installed anyway | installing Bun now requires a matching checksum (`RSLMC_SKIP_BUN_CHECKSUM=1` is a deliberate, logged opt-out) |
+| M12 | The updater accepted any HTTPS host and used `redirect: "follow"` | GitHub-only host list, redirects followed manually and re-validated per hop |
+| L1 | Current-password verification had only the generic 120/min limiter | 10 attempts/minute per account on password change and 2FA disable |
+| L2 | `buckets.clear()` at 20 000 keys was a global fail-open | expired/LRU eviction instead |
+| L4 | `/api/panel/about` returned absolute host paths to any signed-in account | admin-only (`system.manage`); the About page renders "hidden for your role" |
+| L5 | Login answered `account_disabled`/`account_locked` before checking the password, enumerating accounts | password verified first; an unknown caller always sees the same `401` |
+| L6 | `POST /api/servers` accepted any `ownerId` from a `server.create` holder | assigning another owner needs `user.manage`/`system.manage` |
+| L8 | Relay token compared with `!==` | constant-time compare |
+| L9 | `/ws` skipped the Origin check and had no frame cap | `checkOrigin` applied, 64 KB frame limit, oversized frames closed with `1009` |
+| L11 | Downloads validated the first host, then followed redirects blindly | every hop re-validated (`http:`, internal hosts, unknown domains all refused) |
+| L12 | Windows device names (`CON`, `NUL`, `aux.txt`) and trailing dots/spaces were accepted | refused with an explicit message |
+| M10 | `${{ steps.version.outputs.version }}` (a tag name) was interpolated into `run:` in a `contents: write` job | the version is validated as CalVer and passed through `env`; `ci.yml` has `permissions: contents: read`; Bun is pinned |
+| M1 | The startup banner and the login notice claimed the panel *forces* a password change; it never did | no forced change is added (by the operator's explicit decision) — the claim is gone, and both messages now say what is true |
+
+**Deliberately not changed**
+
+* **M1, forced password change.** The operator's instruction for this round is that the bootstrap
+  `admin`/`admin123` account must stay usable with no forced reset. What M1 also asked for — that the
+  panel stop *claiming* an enforcement it does not perform — **is** done.
+* **M1, `HOST` default.** Still `0.0.0.0`, because changing the default would silently make existing
+  installs unreachable. The installer asks which interface to bind and `RSLMC_HOST` overrides it.
+
+**Still open (tracked, not fixed in this round)**
+
+* **M13/M14** — PID reuse when re-adopting a running server (`startedAt` is read but not compared) and
+  the 1500 ms `forceKill` timer that can clobber a Start in the same window. Both need a redesign of the
+  lifecycle lock, not a patch.
+* **L3** — TOTP codes have no used-code ledger, TOTP failures do not count toward the lockout, and the
+  generated recovery codes are never accepted anywhere. The UI does not currently promise recovery.
+* **L7** — `server_subusers.permissions` is stored but never read: a sub-user gets the full server.
+  Sub-user scoping is a feature, not a one-line check.
+* **L10** — a node `fqdn` is admin-controlled and re-probed every 15 s (SSRF by an administrator, who
+  can already do anything) and the agent key is not scoped per endpoint.
+* **§5 dead code** — the review lists ~330 lines of unreferenced exports. Removing them is safe but
+  touches many files; it is queued rather than rushed into a security release.
+
+---
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |
@@ -204,8 +271,8 @@ opt-in for operators who want that script anyway.
 ```bash
 cd rslmc
 bun install
-bun test                              # 205 unit/integration tests (21 files)
-bun run tests/security/pentest.ts     # 125 adversarial checks against a throwaway instance
+bun test                              # 265 unit/integration tests (31 files)
+bun run tests/security/pentest.ts     # 140 adversarial checks against a throwaway instance
 ```
 
 The harness creates its own data directory in `$TMPDIR`, boots the panel on port 3941, seeds two

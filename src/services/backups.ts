@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isSafeLevelName } from "../minecraft/properties";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -101,6 +102,9 @@ export async function createBackup(serverId: number, options: CreateBackupOption
     const pathsToArchive: string[] = [];
     if (options.kind === "worlds") {
       for (const row of query<{ folder: string }>("SELECT folder FROM worlds WHERE server_id = ?", [serverId])) {
+        // A world folder name is a single segment; anything else is skipped rather than archived
+        // (or, later, extracted) outside the server directory.
+        if (!isSafeLevelName(row.folder)) continue;
         if (existsSync(join(directory, row.folder))) pathsToArchive.push(row.folder);
       }
       if (pathsToArchive.length === 0) pathsToArchive.push("world", "world_nether", "world_the_end");

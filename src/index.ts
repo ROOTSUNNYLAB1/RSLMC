@@ -76,15 +76,49 @@ async function main(): Promise<void> {
  * React components set style attributes. `frame-ancestors 'none'` also covers modern browsers that
  * ignore X-Frame-Options.
  */
-function applySecurityHeaders(response: Response, opts: { document?: boolean } = {}): Response {
+function applySecurityHeaders(response: Response, opts: { document?: boolean; userContent?: boolean } = {}): Response {
   const headers = response.headers;
-  headers.set("x-frame-options", "DENY");
-  headers.set("referrer-policy", "same-origin");
   headers.set("x-content-type-options", "nosniff");
   headers.set("permissions-policy", "geolocation=(), microphone=(), camera=(), payment=()");
+  if (opts.userContent) {
+    /*
+     * Files the panel did not author — a world renderer's web output lives in the server's own data
+     * directory, so any account with `server.files` can put an `index.html` (or edit BlueMap's) there.
+     * Served as-is on the panel's origin, that is stored XSS with the viewer's session attached: the
+     * script could read the CSRF token and act as an administrator.
+     *
+     * The fix is an opaque origin: CSP `sandbox` *without* `allow-same-origin` gives the document a
+     * unique origin, so its fetches to /api/* are cross-origin (no CORS rules are added for the API,
+     * so they fail), and it cannot read the panel's cookies or storage. Scripts, styles and assets
+     * still load — the directives below name the schemes explicitly because `'self'` matches nothing
+     * from an opaque origin. `x-frame-options: SAMEORIGIN` (not DENY) lets the Map page embed it.
+     */
+    headers.set("content-security-policy", USER_CONTENT_POLICY);
+    headers.set("x-frame-options", "SAMEORIGIN");
+    headers.set("referrer-policy", "no-referrer");
+    headers.set("cross-origin-resource-policy", "cross-origin");
+    headers.set("access-control-allow-origin", "*");
+    return response;
+  }
+  headers.set("x-frame-options", "DENY");
+  headers.set("referrer-policy", "same-origin");
   if (opts.document) headers.set("content-security-policy", CONTENT_SECURITY_POLICY);
   return response;
 }
+
+/** CSP for renderer output (see `userContent` above): sandboxed, no same-origin, no panel access. */
+const USER_CONTENT_POLICY = [
+  "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock",
+  "default-src https: http: data: blob:",
+  "script-src https: http: data: blob: 'unsafe-inline' 'unsafe-eval'",
+  "style-src https: http: data: blob: 'unsafe-inline'",
+  "img-src https: http: data: blob:",
+  "font-src https: http: data:",
+  "connect-src https: http: data: blob: ws: wss:",
+  "worker-src https: http: data: blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+].join("; ");
 
 /**
  * Extra script origins, opt-in only.
@@ -154,10 +188,12 @@ const server = Bun.serve({
 
       if (url.pathname.startsWith("/api/")) {
         const ip = srv.requestIP(req)?.address ?? "unknown";
+        // Renderer output is user content, not panel content: isolated origin, frameable by the panel.
+        const userContent = /^\/api\/servers\/\d+\/map\/web(\/|$)/.test(url.pathname);
         const response = await handleApiRequest(req, url, ip);
         if (response) {
           response.headers.set("x-rslmc-version", APP_VERSION);
-          return applySecurityHeaders(response);
+          return applySecurityHeaders(response, { userContent });
         }
         return Response.json({ error: { code: "not_found", message: `No API route for ${req.method} ${url.pathname}` } }, { status: 404 });
       }
@@ -194,7 +230,8 @@ const server = Bun.serve({
       }
       return new Response("Not found", { status: 404 });
     },
-    websocket: websocketHandlers,
+    // Console sockets only carry commands and metrics: cap a frame instead of buffering anything.
+    websocket: { ...websocketHandlers, maxPayloadLength: 64 * 1024 },
     error(error) {
       console.error("[rslmc] server error", error);
       return Response.json({ error: { code: "internal_error", message: "Internal server error" } }, { status: 500 });
@@ -257,7 +294,8 @@ const server = Bun.serve({
     `  API routes    ${describeRoutes().length}`,
     `  Boot time     ${bootMs} ms${build.ok ? ` (frontend built in ${build.durationMs} ms)` : " (frontend build FAILED)"}`,
     freshInstall
-      ? "  Setup         First run — bootstrap admin 'admin' / 'admin123' created; the panel forces a password change."
+      ? "  Setup         First run — bootstrap admin 'admin' / 'admin123' created. It is not forced to change: "
+        + "change it in My Profile (and see SECURITY.md) before exposing this panel."
       : "  Setup         Existing installation detected.",
     "",
   ];

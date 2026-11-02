@@ -6,9 +6,31 @@ const MAX_KEYS = 20_000;
 
 export interface RateLimitResult { allowed: boolean; remaining: number; retryAfterSeconds: number }
 
+/**
+ * Drops the oldest buckets when the map grows past the ceiling.
+ *
+ * `buckets.clear()` here wiped *every* counter — a global fail-open that a flood of distinct keys
+ * (one per path/IP) could trigger on purpose, resetting the login and password-verification limits
+ * along with everything else. Expired and least-recently-used entries go first instead.
+ */
+function evict(now: number): void {
+  for (const [key, bucket] of buckets) {
+    const newest = bucket.hits[bucket.hits.length - 1];
+    if (newest === undefined || now - newest > 60 * 60 * 1000) buckets.delete(key);
+  }
+  if (buckets.size <= MAX_KEYS) return;
+  // Still too many live keys: drop in insertion order (Map keeps it) until there is room.
+  const excess = buckets.size - MAX_KEYS;
+  let dropped = 0;
+  for (const key of buckets.keys()) {
+    buckets.delete(key);
+    if (++dropped >= excess) break;
+  }
+}
+
 export function rateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
   const now = Date.now();
-  if (buckets.size > MAX_KEYS) buckets.clear();
+  if (buckets.size > MAX_KEYS) evict(now);
   let bucket = buckets.get(key);
   if (!bucket) {
     bucket = { hits: [] };

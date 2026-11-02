@@ -10,6 +10,15 @@ import { sanitizeRelative } from "../security/paths";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
+/** `archive.tar.gz` → `.tar.gz`, `x.zip` → `.zip`; anything odd or absent → `.zip` (the safe default). */
+function extractExtension(name: string): string {
+  const lower = name.toLowerCase();
+  for (const candidate of [".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".zip", ".tar", ".jar", ".mrpack"]) {
+    if (lower.endsWith(candidate)) return candidate;
+  }
+  return ".zip";
+}
+
 export function registerFileRoutes(api: Router): void {
   api.get("/api/servers/:id/files", async (ctx) => {
     const id = Number(ctx.params.id);
@@ -111,12 +120,24 @@ export function registerFileRoutes(api: Router): void {
     if (!(file instanceof File)) throw badRequest("A file field is required");
 
     if (extract) {
-      const tempPath = `${PATHS.temporary}/${randomUUID()}-${file.name}`;
-      await Bun.write(tempPath, file);
-      const result = extractArchive(id, tempPath, path);
-      rmSync(tempPath, { force: true });
-      recordActivity({ type: "archive.extracted", serverId: id, target: path || "/", actorName: ctx.user!.username, metadata: result });
-      return json({ extracted: result.extracted, path: sanitizeRelative(path) }, { status: 201 });
+      /*
+       * The temp path must be built from a name *we* generate. `file.name` is the multipart
+       * `filename` field, i.e. attacker-controlled: `filename="/../../victim/pwned"` was preserved
+       * verbatim by `formData()` and `Bun.write` normalises the path lexically, so the upload landed
+       * outside the temporary directory — an arbitrary file write for any account holding
+       * `server.files`. Only the extension (needed to pick the right extractor) survives, filtered.
+       */
+      const extension = extractExtension(file.name);
+      const tempPath = `${PATHS.temporary}/${randomUUID()}${extension}`;
+      try {
+        await Bun.write(tempPath, file);
+        const result = extractArchive(id, tempPath, path);
+        recordActivity({ type: "archive.extracted", serverId: id, target: path || "/", actorName: ctx.user!.username, metadata: result });
+        return json({ extracted: result.extracted, path: sanitizeRelative(path) }, { status: 201 });
+      } finally {
+        // Also on failure — the old code only cleaned up after a successful extraction.
+        rmSync(tempPath, { force: true });
+      }
     }
 
     const destination = path === "" ? file.name : `${sanitizeRelative(path)}/${file.name}`;

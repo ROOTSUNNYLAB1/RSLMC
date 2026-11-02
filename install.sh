@@ -641,17 +641,55 @@ else
 fi
 if [[ "$INSTALL_PATH" != /* ]]; then err "The install path must be absolute (got '$INSTALL_PATH')."; exit 2; fi
 INSTALL_PATH="${INSTALL_PATH%/}"
+# Canonicalise *before* the deny-list: `/opt/../etc` is a plain string that matched none of the
+# entries below and then reached `mv`, `chown -R` and `rm -rf` as root.
+INSTALL_PATH="$(canonical_path "$INSTALL_PATH")" || { err "Could not resolve the install path"; exit 2; }
 case "$INSTALL_PATH" in
-  /bin|/boot|/dev|/etc|/lib|/proc|/sys|/usr|/var|/home|/root|/opt|/) err "Refusing to install into $INSTALL_PATH — pick a folder of its own."; exit 2 ;;
+  /|""|/bin|/boot|/dev|/etc|/lib|/lib32|/lib64|/proc|/root|/sbin|/sys|/usr|/usr/*|/var|/var/*|/home|/opt) err "Refusing to install into $INSTALL_PATH — pick a folder of its own."; exit 2 ;;
 esac
 ok "Install path ${C_BOLD}${INSTALL_PATH}${C_RESET}"
 
 # A previous run leaves a small state file next to the code, so re-running this installer on the
 # same path is an upgrade: same data folder, same env file, same secret, servers untouched.
+#
+# The file lives inside a directory the panel's own service account can write to (the panel has to
+# rebuild its frontend bundle there), so it is *untrusted input*: it is parsed, never sourced. Any
+# line that is not one of the four known keys, and any value that is not a plain absolute path, is
+# ignored with a note — a stray `curl … | bash` written into it cannot execute as root.
 STATE_FILE="${INSTALL_PATH}/.rslmc-install"
+read_state_file() {
+  local file="$1" line key value
+  STATE_VERSION=""; STATE_DATA_DIR=""; STATE_ENV_FILE=""; STATE_INSTALLED_AT=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "${line//[[:space:]]/}" || "$line" == \#* ]] && continue
+    if [[ ! "$line" =~ ^([A-Z_]+)=(.*)$ ]]; then
+      dim "ignoring an unexpected line in $(basename "$file")"
+      continue
+    fi
+    key="${BASH_REMATCH[1]}"; value="${BASH_REMATCH[2]}"
+    case "$key" in
+      STATE_VERSION)
+        [[ "$value" =~ ^[0-9][0-9A-Za-z._-]{0,40}$ ]] && STATE_VERSION="$value" ;;
+      STATE_DATA_DIR|STATE_ENV_FILE)
+        # Absolute path, no spaces, no shell metacharacters, nothing that could escape the value.
+        if [[ ! "$value" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+          dim "ignoring $key in $(basename "$file") — not a plain absolute path"
+        elif [[ "$value" == "$INSTALL_PATH"/* || "$value" == "$INSTALL_PATH" ]]; then
+          dim "ignoring $key in $(basename "$file") — it points inside the install directory"
+        elif [[ "$key" == STATE_DATA_DIR ]]; then STATE_DATA_DIR="$value"
+        elif [[ "$value" == *.env ]]; then STATE_ENV_FILE="$value"
+        else dim "ignoring $key in $(basename "$file") — it is not an .env file"
+        fi ;;
+      STATE_INSTALLED_AT)
+        [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$ ]] && STATE_INSTALLED_AT="$value" ;;
+      *)
+        dim "ignoring unknown key $key in $(basename "$file")" ;;
+    esac
+  done <"$file"
+}
 if [[ -f "$STATE_FILE" ]]; then
-  # shellcheck disable=SC1090
-  . "$STATE_FILE"
+  read_state_file "$STATE_FILE"
   EXISTING=1
   EXISTING_VERSION="${STATE_VERSION:-$EXISTING_VERSION}"
   OPT_DATA="${OPT_DATA:-${STATE_DATA_DIR:-}}"
@@ -674,7 +712,14 @@ else
 fi
 if [[ "$DATA_DIR" != /* ]]; then err "The data folder must be absolute (got '$DATA_DIR')."; exit 2; fi
 DATA_DIR="${DATA_DIR%/}"
+DATA_DIR="$(canonical_path "$DATA_DIR")" || { err "Could not resolve the data folder"; exit 2; }
+case "$DATA_DIR" in
+  /|"") err "Refusing to use $DATA_DIR as the data folder — it would be chowned recursively."; exit 2 ;;
+esac
 if [[ "$DATA_DIR" == "$INSTALL_PATH" ]]; then err "The data folder cannot be the same as the install path."; exit 2; fi
+case "$INSTALL_PATH" in
+  "$DATA_DIR"/*) err "The install path cannot live inside the data folder."; exit 2 ;;
+esac
 if [[ $EXISTING -eq 1 ]]; then
   ok "Data folder ${C_BOLD}${DATA_DIR}${C_RESET} (kept — your servers and worlds stay put)"
 else
@@ -806,6 +851,30 @@ trap on_error ERR
 cleanup() { rm -rf "${WORK:-}"; }
 trap cleanup EXIT
 
+# Resolves a path to an absolute, symlink-free form without requiring it to exist yet.
+canonical_path() {
+  local p="$1" suffix="" head p_out=""
+  # `realpath -m` (coreutils) handles missing components; readlink -f needs the final one to exist.
+  if command -v realpath >/dev/null 2>&1 && p_out="$(realpath -m -- "$p" 2>/dev/null)" && [[ -n "$p_out" ]]; then
+    printf '%s\n' "${p_out%/}"; return 0
+  fi
+  head="$p"
+  while [[ ! -e "$head" && "$head" != "/" ]]; do
+    suffix="/$(basename "$head")$suffix"
+    head="$(dirname "$head")"
+  done
+  if [[ -e "$head" ]]; then
+    local real
+    real="$(cd "$head" 2>/dev/null && pwd -P)" || real="$head"
+    p="${real}${suffix}"
+  fi
+  # Collapse `x/../` lexically — harmless here because every component already exists.
+  while [[ "$p" == *"/../"* ]]; do p="${p/\/..\//\/}"; done
+  [[ "$p" == */.. ]] && p="$(dirname "$p")"
+  [[ "$p" == //* ]] && p="${p#/}"
+  printf '%s\n' "${p%/}"
+}
+
 # ── 1. bun ──────────────────────────────────────────────────────────────────
 section "Runtime"
 BUN_BIN=""
@@ -843,21 +912,35 @@ ensure_bun() {
   mkdir -p "$tmp"
   download "$url" "$tmp/bun.zip" "Bun runtime"
 
-  # Bun publishes SHASUMS256.txt next to each release; verify when it is reachable.
-  local sums_url="${url%/*}/SHASUMS256.txt"
-  if curl -fsSL --max-time 20 -o "$tmp/SHASUMS256.txt" "$sums_url" 2>/dev/null; then
-    local want got
+  # Bun publishes SHASUMS256.txt next to each release. It is required: this archive is unpacked and
+  # installed as root, so "the checksum file did not load, carry on" was a hole, and a file with no
+  # line for our asset passed silently as well. An explicit opt-out exists for an air-gapped mirror.
+  local sums_url="${url%/*}/SHASUMS256.txt" want got
+  if ! curl -fsSL --max-time 20 -o "$tmp/SHASUMS256.txt" "$sums_url" 2>/dev/null; then
+    if [[ "${RSLMC_SKIP_BUN_CHECKSUM:-0}" == "1" ]]; then
+      warn "RSLMC_SKIP_BUN_CHECKSUM=1 — installing Bun without a checksum (you asked for this)."
+      RSLMC_SKIP_BUN_CHECKSUM=1
+    else
+      err "The Bun checksum file could not be downloaded from ${sums_url}."
+      say "Refusing to install an unverified runtime. Install Bun yourself (https://bun.sh) and re-run,"
+      say "or set RSLMC_SKIP_BUN_CHECKSUM=1 if you are using a mirror you trust."
+      return 1
+    fi
+  fi
+  if [[ "${RSLMC_SKIP_BUN_CHECKSUM:-0}" != "1" ]]; then
     want="$(awk -v a="$(basename "$url")" '$2==a || $2=="*"a {print $1}' "$tmp/SHASUMS256.txt" | head -n1)"
     got="$(sha256_of "$tmp/bun.zip")"
-    if [[ -n "$want" && "$want" != "$got" ]]; then
+    if [[ -z "$want" ]]; then
+      err "SHASUMS256.txt has no entry for $(basename "$url") — refusing to install an unverified runtime."
+      return 1
+    fi
+    if [[ "$want" != "$got" ]]; then
       err "Bun checksum mismatch — refusing to install it."
       say "expected $want"
       say "got      $got"
       return 1
     fi
-    [[ -n "$want" ]] && ok "Bun checksum verified (sha256 ${got:0:16}…)"
-  else
-    warn "Bun does not publish a checksum file for this asset — installing without a checksum."
+    ok "Bun checksum verified (sha256 ${got:0:16}…)"
   fi
 
   ( cd "$tmp" && { have unzip && unzip -oq bun.zip || python3 -c "import zipfile,sys; zipfile.ZipFile('bun.zip').extractall('.')" || busybox unzip -o bun.zip; } ) >/dev/null 2>&1 \
@@ -981,9 +1064,14 @@ stop_running() {
       run systemctl stop "$SERVICE" >/dev/null 2>&1 || true
       STOPPED=1
     fi
-  elif [[ -x "$INSTALL_PATH/rslmc-ctl" ]]; then
-    if "$INSTALL_PATH/rslmc-ctl" status >/dev/null 2>&1; then
-      "$INSTALL_PATH/rslmc-ctl" stop >/dev/null 2>&1 || true
+  else
+    # Prefer the root-owned control script; fall back to a copy in the install directory (user mode).
+    local ctl=""
+    if [[ $OPT_USER_MODE -eq 0 && -x /usr/local/sbin/rslmc-ctl ]]; then ctl="/usr/local/sbin/rslmc-ctl"
+    elif [[ -x "$INSTALL_PATH/rslmc-ctl" ]]; then ctl="$INSTALL_PATH/rslmc-ctl"
+    fi
+    if [[ -n "$ctl" ]] && "$ctl" status >/dev/null 2>&1; then
+      "$ctl" stop >/dev/null 2>&1 || true
       STOPPED=1
     fi
   fi
@@ -1116,7 +1204,14 @@ ok "Install state recorded in ${STATE_FILE}"
 
 # ── 7. service ─────────────────────────────────────────────────────────────
 section "Installing the service"
-CTL_FILE="$INSTALL_PATH/rslmc-ctl"
+if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
+  # Root-owned and outside the install directory on purpose: this script is *executed as root*, and
+  # the install directory belongs to the service account (the panel rebuilds its frontend there), so
+  # a copy inside it would be a root-executes-service-code path.
+  CTL_FILE="/usr/local/sbin/rslmc-ctl"
+else
+  CTL_FILE="$INSTALL_PATH/rslmc-ctl"
+fi
 if [[ $USE_SYSTEMD -eq 1 ]]; then
   UNIT="$(mktemp)"
   PROTECT_HOME="yes"
@@ -1235,7 +1330,9 @@ case "\${1:-status}" in
 esac
 CTLFILE
   chmod 0755 "$CTL_FILE"
-  [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]] && run chown "$RUN_USER":"$RUN_USER" "$CTL_FILE" 2>/dev/null || true
+  # Never hand this to the service account: it is run as root (see above).
+  [[ $OPT_USER_MODE -eq 1 || $CAN_ROOT -eq 0 ]] && run chown "$RUN_USER":"$RUN_USER" "$CTL_FILE" 2>/dev/null || true
+  if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then run chown root:root "$CTL_FILE" 2>/dev/null || true; fi
   ok "Control script written: ${CTL_FILE} {start|stop|restart|status|logs}"
   if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then
     printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$CTL_FILE" >"$WORK/rslmc-cli"

@@ -1,7 +1,7 @@
-import { Router, json, validate, v, badRequest, notFound, pagination, ApiException } from "../shared/http";
+import { Router, json, validate, v, badRequest, forbidden, notFound, pagination, ApiException } from "../shared/http";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, extname, sep, resolve } from "node:path";
-import { requireServerAccess, requirePermission } from "../auth";
+import { requireServerAccess, requirePermission, hasPermission } from "../auth";
 import {
   listServersForUser, getServer, createServer, deleteServer, updateServerSettings, reinstallServer,
   serverMetricsHistory, currentServerMetrics, acceptEula,
@@ -128,6 +128,16 @@ export function registerServerRoutes(api: Router): void {
       },
       body,
     );
+    /*
+     * `server.create` is a real permission, but handing a server to *another* account is an
+     * administrative act: it used to be a free-form `ownerId`, so any account that could create a
+     * server could also give one to someone else (or to a user it should not touch). Without
+     * `user.manage`, the server is always yours.
+     */
+    const canAssignOwner = ctx.user!.isRoot || hasPermission(ctx.user, ["user.manage", "system.manage"]);
+    if (!canAssignOwner && input.ownerId !== ctx.user!.id) {
+      throw forbidden("Only an administrator can create a server for another account.");
+    }
     const result = await createServer(
       {
         name: input.name!,

@@ -3,6 +3,31 @@ import { hashPassword, checkPasswordPolicy } from "../security/passwords";
 import { badRequest, ApiException } from "../shared/http";
 import { needsSetup } from "./bootstrap";
 import { notify } from "./notifications";
+import { roleHasAdminAccess, DANGEROUS_PERMISSIONS } from "../shared/permissions";
+
+/**
+ * The permissions a role actually grants. `roleHasAdminAccess` for self-registration must look at
+ * the database, not at the role's name: `PUT /api/system/registration {"defaultRole":"Administrator"}`
+ * was accepted as-is, and because registration only needs the *sign-up* path to be public, that
+ * turned "enable self-registration" into "publish an administrator account" on any panel where an
+ * administrator had switched it on for normal users.
+ */
+export function rolePermissions(roleId: number): string[] {
+  return query<{ permission: string }>("SELECT permission FROM role_permissions WHERE role_id = ?", [roleId])
+    .map((row) => row.permission);
+}
+
+export function assertSafeDefaultRole(roleName: string): void {
+  const role = queryOne<{ id: number }>("SELECT id FROM roles WHERE name = ?", [roleName]);
+  if (!role) throw badRequest(`There is no role called “${roleName}”.`);
+  const permissions = rolePermissions(role.id);
+  if (roleHasAdminAccess(permissions)) {
+    throw badRequest(
+      `“${roleName}” can reach the administration area, so it cannot be the role for self-registered ` +
+      "accounts. Pick a role that only has server-level access (for example User or Viewer).",
+    );
+  }
+}
 
 /**
  * Self-registration.
@@ -56,17 +81,28 @@ export function readRegistrationConfig(): RegistrationConfig {
 export function defaultRoleRow(): { id: number; name: string } {
   const configured = readRegistrationConfig().defaultRole;
   const wanted = queryOne<{ id: number; name: string }>("SELECT id, name FROM roles WHERE name = ?", [configured]);
-  if (wanted) return wanted;
+  // A stored setting can predate the check in writeRegistrationConfig (or the role was edited since).
+  if (wanted && !roleHasAdminAccess(rolePermissions(wanted.id))) return wanted;
   for (const fallback of ["User", "Viewer"]) {
     const row = queryOne<{ id: number; name: string }>("SELECT id, name FROM roles WHERE name = ?", [fallback]);
-    if (row) return row;
+    if (row && !roleHasAdminAccess(rolePermissions(row.id))) return row;
   }
+  const safe = DANGEROUS_PERMISSIONS.map(() => "?").join(", ");
   const smallest = queryOne<{ id: number; name: string }>(
     `SELECT r.id, r.name FROM roles r
      LEFT JOIN role_permissions rp ON rp.role_id = r.id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM role_permissions d WHERE d.role_id = r.id AND d.permission IN (${safe})
+     )
      GROUP BY r.id ORDER BY COUNT(rp.permission) ASC, r.id ASC LIMIT 1`,
+    DANGEROUS_PERMISSIONS,
   );
-  if (!smallest) throw badRequest("No roles are defined, so a new account cannot be given any access.");
+  if (!smallest) {
+    throw badRequest(
+      "Every role on this panel can reach the administration area, so there is no safe role for a " +
+      "self-registered account. Create a server-level role (for example User) first.",
+    );
+  }
   return smallest;
 }
 
@@ -74,8 +110,7 @@ export function writeRegistrationConfig(patch: RegistrationPatch): RegistrationC
   if (patch.enabled !== undefined) setSetting(KEYS.enabled, patch.enabled ? "1" : "0");
   if (patch.requireCode !== undefined) setSetting(KEYS.requireCode, patch.requireCode ? "1" : "0");
   if (patch.defaultRole !== undefined) {
-    const role = queryOne<{ id: number }>("SELECT id FROM roles WHERE name = ?", [patch.defaultRole]);
-    if (!role) throw badRequest(`There is no role called “${patch.defaultRole}”.`);
+    assertSafeDefaultRole(patch.defaultRole);
     setSetting(KEYS.defaultRole, patch.defaultRole);
   }
   if (patch.inviteCode !== undefined) {

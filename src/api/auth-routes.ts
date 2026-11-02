@@ -28,6 +28,20 @@ async function issueSessionFor(user: any, ctx: any) {
   return { ...session, user: publicUser(findUserById(user.id)!) };
 }
 
+/**
+ * Brute-force guard for routes that verify the *current* password.
+ *
+ * The generic limiter (120/min per IP and path) is far too loose for this: a stolen session could
+ * try passwords from a single address and never trip it. Keyed by the account, not the IP, so
+ * rotating addresses does not help either.
+ */
+function passwordVerifyLimiter(userId: number): void {
+  const limit = rateLimit(`pwverify:${userId}`, 10, 60_000);
+  if (!limit.allowed) {
+    throw new ApiException(429, "rate_limited", `Too many password attempts. Try again in ${limit.retryAfterSeconds}s.`);
+  }
+}
+
 export function registerAuthRoutes(api: Router): void {
   api.post("/api/auth/login", async (ctx) => {
     const body = await ctx.body<{ username?: string; password?: string; totp?: string }>();
@@ -63,8 +77,9 @@ export function registerAuthRoutes(api: Router): void {
       user: result.user,
       csrfToken: result.csrfToken,
       expiresAt: result.expiresAt,
+      // A pointer, not a claim of enforcement: nothing blocks the panel until the password changes.
       securityNotice: result.user.mustChangePassword
-        ? "Important: Change your default administrator password immediately to protect your account."
+        ? "This account still uses the bootstrap password. Change it in My Profile before anyone else can reach this panel."
         : null,
     });
     response.headers.append("set-cookie", serializeCookie(SESSION_COOKIE, result.token, sessionCookieOptions(ctx.req)));
@@ -273,9 +288,15 @@ export function registerAuthRoutes(api: Router): void {
     const state = ctx.query("state");
     if (!code || !state) return failTo("The sign-in response was incomplete.");
 
-    // CSRF: the state must exist, be unused, unexpired, and match the cookie set when we redirected.
+    /*
+     * CSRF: the state must exist, be unused, unexpired, and match the cookie set when we redirected.
+     * A *missing* cookie used to skip the comparison entirely (`if (cookieState && …)`), so anyone
+     * could hand a victim a callback URL with their own state/code and sign them into the attacker's
+     * account (login CSRF). Both halves are now required.
+     */
     const cookieState = ctx.cookies[OAUTH_STATE_COOKIE];
-    if (cookieState && cookieState !== state) return failTo("The sign-in request could not be verified (state mismatch).");
+    if (!cookieState) return failTo("The sign-in request could not be verified (the state cookie is missing). Start the sign-in again from this browser.");
+    if (cookieState !== state) return failTo("The sign-in request could not be verified (state mismatch).");
     const stored = consumeState(state, provider);
     if (!stored) return failTo("The sign-in link expired or was already used. Please try again.");
 
@@ -379,6 +400,7 @@ export function registerAuthRoutes(api: Router): void {
       { currentPassword: v.string({ min: 1, max: 200 }), newPassword: v.string({ min: 10, max: 200 }) },
       body,
     );
+    passwordVerifyLimiter(ctx.user.id);
     await changePassword(ctx.user.id, input.currentPassword!, input.newPassword!);
     destroyAllSessionsForUser(ctx.user.id);
     recordAudit({
@@ -398,6 +420,19 @@ export function registerAuthRoutes(api: Router): void {
 
   api.post("/api/auth/totp/setup", async (ctx) => {
     if (!ctx.user) throw unauthorized();
+    /*
+     * Re-running setup *resets* `totp_enabled` to 0 — i.e. it turns an existing second factor off.
+     * It used to do that with no proof of anything but a session cookie, so a stolen session could
+     * silently downgrade a protected account. When 2FA is already on, the current password is
+     * required (the disable route below always asked for it).
+     */
+    const current = findUserById(ctx.user.id)!;
+    if (current.totp_enabled === 1) {
+      const body = await ctx.body<{ password?: string }>();
+      if (!(await verifyPassword(String(body.password ?? ""), current.password_hash))) {
+        throw badRequest("Two-factor authentication is already on. Enter your current password to replace it.");
+      }
+    }
     const secret = generateTotpSecret();
     run("UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?", [secret, ctx.user.id]);
     return json({ secret, otpauthUrl: otpauthUrl(secret, ctx.user.username), issuer: "RSLMC" });
@@ -420,6 +455,7 @@ export function registerAuthRoutes(api: Router): void {
     if (!ctx.user) throw unauthorized();
     const body = await ctx.body<{ password?: string }>();
     const row = findUserById(ctx.user.id)!;
+    passwordVerifyLimiter(ctx.user.id);
     const ok = await verifyPassword(String(body.password ?? ""), row.password_hash);
     if (!ok) throw badRequest("Password is incorrect");
     run("UPDATE users SET totp_enabled = 0, totp_secret = NULL, totp_recovery = NULL WHERE id = ?", [ctx.user.id]);

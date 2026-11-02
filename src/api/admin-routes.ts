@@ -41,14 +41,49 @@ function permissionsOfRoles(roleNames: string[]): string[] | null {
   return [...out];
 }
 
+/**
+ * Resolves role names to ids, refusing anything unknown.
+ *
+ * Callers used to `continue` past a name they could not find while the guard above had already
+ * returned early on it — so `{"roles":["Administrator","no-such-role"]}` skipped the capability check
+ * and granted Administrator to a plain `user.manage` holder. One resolution, one place, no skipping.
+ */
+function resolveRoleIds(roleNames: string[]): Array<{ id: number; name: string }> {
+  const resolved: Array<{ id: number; name: string }> = [];
+  for (const name of roleNames) {
+    const role = queryOne<{ id: number; name: string }>("SELECT id, name FROM roles WHERE name = ?", [name]);
+    if (!role) throw badRequest(`There is no role called “${name}”.`);
+    resolved.push(role);
+  }
+  return resolved;
+}
+
 function assertCanGrantRoles(actor: { isRoot: boolean; permissions: string[] }, roleNames: string[]): void {
-  if (actor.isRoot || roleNames.length === 0) return;
-  const granted = permissionsOfRoles(roleNames);
-  if (granted === null) return; // unknown role is reported by the caller
+  if (actor.isRoot) return;                       // root may grant anything
+  resolveRoleIds(roleNames);                      // unknown names are a client error, never a skip
+  if (roleNames.length === 0) return;
+  const granted = permissionsOfRoles(roleNames) ?? [];
   const mine = new Set(actor.permissions);
   const beyond = granted.filter((permission) => permission !== "*" && !mine.has(permission));
   if (beyond.length > 0) {
     throw forbidden(`You cannot grant permissions you do not have yourself (${beyond.slice(0, 3).join(", ")}).`);
+  }
+}
+
+/**
+ * A `role.manage` holder must not be able to write a permission it does not hold itself — otherwise
+ * it edits a role it already has, adds `user.manage`/`system.manage`, and is an administrator on the
+ * next request (permissions are re-read from the database every time).
+ */
+function assertCanWritePermissions(actor: { isRoot: boolean; permissions: string[] }, permissions: string[]): void {
+  if (actor.isRoot || actor.permissions.includes("*")) return;
+  const mine = new Set(actor.permissions);
+  const beyond = permissions.filter((permission) => !mine.has(permission));
+  if (beyond.length > 0) {
+    throw forbidden(
+      `You cannot add permissions you do not have yourself (${beyond.slice(0, 3).join(", ")}). ` +
+      "Ask a root administrator to grant them.",
+    );
   }
 }
 
@@ -384,9 +419,8 @@ export function registerAdminRoutes(api: Router): void {
     const id = insert("INSERT INTO users (username, email, password_hash, is_root) VALUES (?, ?, ?, ?)", [
       newUsername, input.email ?? null, await hashPassword(input.password!), input.isRoot ? 1 : 0,
     ]);
-    for (const roleName of input.roles ?? []) {
-      const role = queryOne<{ id: number }>("SELECT id FROM roles WHERE name = ?", [roleName]);
-      if (role) run("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)", [id, role.id]);
+    for (const role of resolveRoleIds(input.roles ?? [])) {
+      run("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)", [id, role.id]);
     }
     recordAudit({ actorId: ctx.user!.id, actorName: ctx.user!.username, action: "user.created", ip: ctx.clientIp, targetType: "user", targetId: id });
     return json({ id }, { status: 201 });
@@ -419,10 +453,11 @@ export function registerAdminRoutes(api: Router): void {
       userId,
     ]);
     if (Array.isArray(body.roles)) {
+      // Resolve first (throws on an unknown name), then replace — never skip a name silently.
+      const roles = resolveRoleIds(body.roles);
       run("DELETE FROM user_roles WHERE user_id = ?", [userId]);
-      for (const roleName of body.roles) {
-        const role = queryOne<{ id: number }>("SELECT id FROM roles WHERE name = ?", [roleName]);
-        if (role) run("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)", [userId, role.id]);
+      for (const role of roles) {
+        run("INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)", [userId, role.id]);
       }
     }
     recordAudit({ actorId: ctx.user!.id, actorName: ctx.user!.username, action: "user.updated", ip: ctx.clientIp, targetType: "user", targetId: userId });
@@ -502,6 +537,16 @@ export function registerAdminRoutes(api: Router): void {
     requirePermission(ctx.user, "user.manage");
     const userId = Number(ctx.params.id);
     if (userId === ctx.user!.id) throw badRequest("You cannot delete your own account");
+    /*
+     * PATCH, password reset and allocation all refused to touch a root account from a non-root
+     * actor; DELETE did not, and `DELETE /api/users/<root id>` destroyed the account and cascaded
+     * its sessions. Same rule everywhere: root accounts are only reachable by root.
+     */
+    const target = findUserById(userId);
+    if (!target) throw notFound("User not found");
+    if (target.is_root === 1 && !ctx.user!.isRoot) {
+      throw forbidden("Only a root administrator can delete a root account.");
+    }
     const owned = queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM servers WHERE owner_id = ?", [userId])?.c ?? 0;
     if (owned > 0) throw badRequest(`This user owns ${owned} server(s). Transfer ownership first.`);
     run("DELETE FROM users WHERE id = ?", [userId]);
@@ -525,6 +570,7 @@ export function registerAdminRoutes(api: Router): void {
     const name = String(body.name ?? "").trim();
     if (!name) throw badRequest("Role name is required");
     if (queryOne("SELECT id FROM roles WHERE name = ?", [name])) throw badRequest("That role already exists");
+    assertCanWritePermissions(ctx.user!, body.permissions ?? []);
     const id = insert("INSERT INTO roles (name, description) VALUES (?, ?)", [name, body.description ?? null]);
     for (const permission of body.permissions ?? []) {
       if (ALL_PERMISSIONS.includes(permission as any)) {
@@ -543,6 +589,7 @@ export function registerAdminRoutes(api: Router): void {
     const body = await ctx.body<{ name?: string; description?: string; permissions?: string[] }>();
     run("UPDATE roles SET name = ?, description = ? WHERE id = ?", [body.name ?? role.name, body.description ?? role.description, roleId]);
     if (Array.isArray(body.permissions)) {
+      assertCanWritePermissions(ctx.user!, body.permissions);
       run("DELETE FROM role_permissions WHERE role_id = ?", [roleId]);
       for (const permission of body.permissions) {
         if (ALL_PERMISSIONS.includes(permission as any)) {

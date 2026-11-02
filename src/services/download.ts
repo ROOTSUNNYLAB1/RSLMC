@@ -80,6 +80,29 @@ async function hashFile(path: string, algorithm: "sha256" | "sha1"): Promise<str
  * Streams a download to a temporary file, verifies its checksum, then atomically renames it
  * into place. A partially downloaded file is never used or executed.
  */
+/**
+ * `fetch` with redirects followed manually, re-validating each hop.
+ * Five hops is more than any of these CDNs use; anything longer is treated as a loop.
+ */
+async function fetchTrustedRedirects(url: URL, init: RequestInit, maxHops = 5): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= maxHops; hop += 1) {
+    const response = await fetch(current, { ...init, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) throw new ApiException(502, "download_failed", `${current.hostname} redirected without a location`);
+      let next: URL;
+      try { next = new URL(location, current); } catch {
+        throw new ApiException(502, "download_failed", `${current.hostname} redirected to an unparsable URL`);
+      }
+      current = assertTrustedUrl(next.toString());   // throws for http:, internal hosts, unknown domains
+      continue;
+    }
+    return response;
+  }
+  throw new ApiException(502, "download_failed", `${url.hostname} redirected too many times`);
+}
+
 export async function downloadFile(options: DownloadOptions): Promise<DownloadResult> {
   const url = assertTrustedUrl(options.url);
   const destination = options.destination;
@@ -114,14 +137,23 @@ export async function downloadFile(options: DownloadOptions): Promise<DownloadRe
     }
   };
 
+  /*
+   * Redirects are followed by hand so that every hop is validated by `assertTrustedUrl`. Vendor CDNs
+   * redirect constantly (Mojang → piston-data, Modrinth → cdn.modrinth), and `redirect: "follow"`
+   * meant only the *first* URL was checked: a 302 to `http://169.254.169.254/…` would have been
+   * fetched without anyone looking at it.
+   */
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchTrustedRedirects(url, {
       headers: { "user-agent": "RSLMC/1.0 (+https://github.com/rslmc)", ...(options.headers ?? {}) },
       signal: options.signal,
-      redirect: "follow",
     });
   } catch (err) {
+    if (err instanceof ApiException) {
+      publish(0, 0, true, err.message);
+      throw err;
+    }
     publish(0, 0, true, `Network error: ${err instanceof Error ? err.message : String(err)}`);
     throw new ApiException(502, "download_failed", `Could not reach ${url.hostname}`);
   }

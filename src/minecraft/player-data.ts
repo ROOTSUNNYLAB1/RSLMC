@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { queryOne } from "../database";
 import { ApiException } from "../shared/http";
 import { serverDir } from "../shared/config";
-import { readProperties } from "./properties";
+import { readProperties, levelNameOf } from "./properties";
 import { isRunning, runtimeState } from "../processes/manager";
 import { recordActivity } from "../services/audit";
 import {
@@ -78,7 +78,7 @@ export function playerDataPath(serverId: number, uuid: string): string | null {
   if (!row) return null;
   const directory = serverDir(row.uuid);
   const properties = readProperties(directory);
-  const levelName = properties.values["level-name"] || "world";
+  const levelName = levelNameOf(properties.values);
   return join(directory, levelName, "playerdata", `${uuid}.dat`);
 }
 

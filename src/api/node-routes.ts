@@ -1,10 +1,16 @@
-import { Router, json, validate, v, badRequest, notFound, ApiException } from "../shared/http";
+import { Router, json, validate, v, badRequest, notFound, forbidden, ApiException } from "../shared/http";
 import { requirePermission } from "../auth";
+import type { UserPublic } from "../shared/types";
 import { query, queryOne, run } from "../database";
 import { APP_VERSION } from "../shared/config";
 import { probeNode, getNode, nodeRequestOrThrow, nodeIsOnline, type NodeRow } from "../nodes/client";
 import { nodeSelfState, setAgentKey, clearAgentKey, handshakePayload, nodeServerInventory, NODE_API_VERSION, recordAgentEvent } from "../nodes/agent";
 import { recordAudit } from "../services/audit";
+
+/** The synthetic account api/index.ts attaches to a request carrying a valid node agent key. */
+function isNodeController(user: UserPublic | undefined): boolean {
+  return Boolean(user && user.id === 0);
+}
 
 /**
  * Node management: the controller side (register, test, rotate, remove) and the node side
@@ -169,9 +175,21 @@ export function registerNodeRoutes(router: Router): void {
    * session check in api/index.ts, which is the only place a request can become a "node controller"
    * request). These handlers therefore never see a user session and must not assume one.
    */
-  router.get("/api/agent/handshake", async () => json(handshakePayload()));
+  router.get("/api/agent/handshake", async (ctx) => {
+    if (!isNodeController(ctx.user)) throw forbidden("This endpoint is for a registered node controller.");
+    return json(handshakePayload());
+  });
 
-  router.get("/api/agent/servers", async () => json({ data: nodeServerInventory() }));
+  /*
+   * Only a controller holds the agent key (api/index.ts turns that into `ctx.user.id === 0`). This
+   * used to answer with every server's id, uuid and name to *any signed-in account* — which matters
+   * because those UUIDs are the directory names under the data root, i.e. the missing half of the
+   * `level-name` traversal below.
+   */
+  router.get("/api/agent/servers", async (ctx) => {
+    if (!isNodeController(ctx.user)) throw forbidden("This endpoint is for a registered node controller.");
+    return json({ data: nodeServerInventory() });
+  });
 
   /**
    * The controller proves it holds the key and the node records which controller it belongs to.

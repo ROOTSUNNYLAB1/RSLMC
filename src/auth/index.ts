@@ -101,17 +101,24 @@ export async function login(
     await hashPassword("rslmc-dummy-password-check");
     throw new AuthError(401, "invalid_credentials", "Invalid username or password");
   }
-  if (user.disabled) throw new AuthError(403, "account_disabled", "This account has been disabled");
-  if (user.locked_until && new Date(user.locked_until).getTime() > Date.now()) {
-    throw new AuthError(429, "account_locked", "Too many failed attempts. Try again later.");
-  }
+  /*
+   * The password is verified before any account *state* is reported. Answering `account_disabled` or
+   * `account_locked` first told an anonymous visitor which usernames exist (and let them keep an
+   * account locked out by hammering it). A caller who does not know the password now always sees the
+   * same 401; one who does gets the real reason.
+   */
   const valid = await verifyPassword(password, user.password_hash);
+  const locked = Boolean(user.locked_until && new Date(user.locked_until).getTime() > Date.now());
   if (!valid) {
-    const attempts = user.failed_attempts + 1;
-    const lockUntil = attempts >= 8 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
-    run("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", [attempts, lockUntil, user.id]);
+    if (!locked) {
+      const attempts = user.failed_attempts + 1;
+      const lockUntil = attempts >= 8 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+      run("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", [attempts, lockUntil, user.id]);
+    }
     throw new AuthError(401, "invalid_credentials", "Invalid username or password");
   }
+  if (locked) throw new AuthError(429, "account_locked", "Too many failed attempts. Try again later.");
+  if (user.disabled) throw new AuthError(403, "account_disabled", "This account has been disabled");
   if (user.totp_enabled === 1) {
     if (!totp) throw new AuthError(401, "totp_required", "Two-factor authentication code required");
     const { verifyTotp } = await import("../security/totp");

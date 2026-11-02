@@ -55,16 +55,23 @@ export function MapViewPage({ server }: { server: ServerSummary }) {
             <span className="text-xs faint">{status.maps.length} map folder(s): {status.maps.map((map) => map.id).join(", ") || "—"}</span>
           </div>
           <Card bodyClass="tight">
+            {/*
+              * The renderer's output is user content: any account that can write files on this server
+              * could otherwise put a script there. The response is served with a CSP sandbox (opaque
+              * origin) and the frame repeats that with the `sandbox` attribute, so the map can draw
+              * itself but cannot read this panel's session or call its API.
+              */}
             <iframe
               key={reloadKey}
               title={`Map for ${server.name}`}
               src={`/api/servers/${server.id}/map/web/`}
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
               style={{ width: "100%", height: "min(72vh, 780px)", border: 0, display: "block", background: "var(--bg)" }}
               referrerPolicy="no-referrer"
             />
           </Card>
           <div className="text-xs faint" style={{ marginTop: 8 }}>
-            BlueMap loads terrain, textures and player markers from the files it rendered on this host. If the panel shows an error page instead, the renderer has not finished writing its output — check the console.
+            BlueMap loads terrain, textures and player markers from the files it rendered on this host. The viewer runs sandboxed, so it cannot reach your panel session. If it stays blank, the renderer has not finished writing its output — check the console.
           </div>
         </>
       ) : (

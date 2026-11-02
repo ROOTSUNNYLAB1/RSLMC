@@ -424,6 +424,10 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
     throw new ApiException(400, "memory_flags_in_jvm_args",
       "Remove -Xms / -Xmx from the JVM flags: the heap size comes from the memory allocation.");
   }
+  if (input.jvmArgs && HEAP_OVERRIDE_PATTERN.test(input.jvmArgs)) {
+    throw new ApiException(400, "memory_flags_in_jvm_args",
+      "Remove -XX:MaxHeapSize / -XX:InitialHeapSize / -XX:MaxRAMPercentage from the JVM flags: the heap size comes from the memory allocation.");
+  }
   const jvmArgs = input.jvmArgs?.trim() ? input.jvmArgs.trim() : defaultJvmArgsFor(input.software as ServerSoftwareId, input.memoryMb);
   const uuid = randomUUID();
   const enforcement = describeEnforcement();
@@ -746,6 +750,10 @@ export function pruneGhostServers(): number {
   return removed;
 }
 
+/** Heap-sizing flags that would overrule the panel's own `-Xmx` (they come later on the command line). */
+const HEAP_OVERRIDE_PATTERN =
+  /-XX:(?:MaxHeapSize|InitialHeapSize|MaxRAMPercentage|InitialRAMPercentage|MinRAMPercentage|MaxRAM|SoftMaxHeapSize)\b/i;
+
 export function updateServerSettings(
   serverId: number, patch: Record<string, unknown>, actor: string,
 ): { server: ServerSummary; warnings: string[] } {
@@ -770,6 +778,19 @@ export function updateServerSettings(
     throw new ApiException(
       400, "memory_flags_in_jvm_args",
       "Remove -Xms / -Xmx from the JVM flags: the heap size comes from the memory allocation (-Xms and -Xmx are added automatically).",
+    );
+  }
+  /*
+   * ...and the same rule for the HotSpot equivalents. The panel writes `-Xmx<allocation>` and then
+   * appends these flags, so a later `-XX:MaxHeapSize=` (the long form of -Xmx) silently won — the
+   * allocation in the UI said 2 GB while the JVM ran with whatever the flag asked for. `*RAMPercentage`
+   * is refused as well because it replaces the fixed maximum outright.
+   */
+  if (typeof patch.jvmArgs === "string" && HEAP_OVERRIDE_PATTERN.test(patch.jvmArgs)) {
+    throw new ApiException(
+      400, "memory_flags_in_jvm_args",
+      "Remove -XX:MaxHeapSize / -XX:InitialHeapSize / -XX:MaxRAMPercentage from the JVM flags: the heap size comes from the memory allocation. " +
+      "Native caps such as -XX:MaxDirectMemorySize are fine — they only limit.",
     );
   }
   for (const [key, column] of Object.entries(allowed)) {
