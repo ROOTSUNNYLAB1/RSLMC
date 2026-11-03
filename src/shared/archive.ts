@@ -38,6 +38,11 @@ const EXTRACT_MAX_ENTRIES = 200_000;
 class ExtractBudget {
   private bytes = 0;
   private entries = 0;
+  /** Directories count too: 500k empty folders used to slip past the entry guard entirely. */
+  spendEntry(entry: string): void {
+    this.spend(0, entry);
+  }
+
   spend(size: number, entry: string): void {
     this.bytes += size;
     this.entries += 1;
@@ -354,6 +359,7 @@ export function extractTarGz(archivePath: string, destination: string): ExtractR
 
     if (type === "5") {
       const dir = resolveInside(destination, rawName);
+      budget.spendEntry(rawName);
       mkdirSync(dir, { recursive: true });
       applyMode(dir, readOctal(block, 100, 8));
       result.directories += 1;
@@ -425,6 +431,7 @@ export function extractZip(archivePath: string, destination: string): ExtractRes
 
     if (isDirectory) {
       const dir = resolveInside(destination, name);
+      budget.spendEntry(name);
       mkdirSync(dir, { recursive: true });
       applyMode(dir, entryMode);
       result.directories += 1;

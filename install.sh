@@ -198,6 +198,32 @@ done
 # ─────────────────────────────────────────────────────────────── helpers ────
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Runs a command as root when the installer has sudo; plain otherwise.
+run() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
+
+canonical_path() {
+  local p="$1" suffix="" head p_out=""
+  # `realpath -m` (coreutils) handles missing components; readlink -f needs the final one to exist.
+  if command -v realpath >/dev/null 2>&1 && p_out="$(realpath -m -- "$p" 2>/dev/null)" && [[ -n "$p_out" ]]; then
+    printf '%s\n' "${p_out%/}"; return 0
+  fi
+  head="$p"
+  while [[ ! -e "$head" && "$head" != "/" ]]; do
+    suffix="/$(basename "$head")$suffix"
+    head="$(dirname "$head")"
+  done
+  if [[ -e "$head" ]]; then
+    local real
+    real="$(cd "$head" 2>/dev/null && pwd -P)" || real="$head"
+    p="${real}${suffix}"
+  fi
+  # Collapse `x/../` lexically — harmless here because every component already exists.
+  while [[ "$p" == *"/../"* ]]; do p="${p/\/..\//\/}"; done
+  [[ "$p" == */.. ]] && p="$(dirname "$p")"
+  [[ "$p" == //* ]] && p="${p#/}"
+  printf '%s\n' "${p%/}"
+}
+
 # /dev/tty can exist and still refuse to open (containers, cron, "curl | bash" over ssh -T).
 tty_ok() { { : < /dev/tty; } 2>/dev/null; }
 INTERACTIVE=0
@@ -349,7 +375,6 @@ port_free() { # port_free <port> [host]
   else return 0; fi
 }
 
-
 # GitHub answers https://github.com/<repo>/releases/latest with a redirect to the newest tag.
 # Unlike api.github.com this is not rate limited, so the installer still works on a fresh server
 # or behind a shared NAT.
@@ -389,7 +414,6 @@ if [[ $ROOT -eq 0 ]] && have sudo; then
   CAN_ROOT=1
   SUDO="sudo"
 fi
-run() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
 
 # --user-mode means "everything under $HOME, as me": escalating to root would leave root-owned
 # folders behind and break the very next run as that user.
@@ -852,28 +876,6 @@ cleanup() { rm -rf "${WORK:-}"; }
 trap cleanup EXIT
 
 # Resolves a path to an absolute, symlink-free form without requiring it to exist yet.
-canonical_path() {
-  local p="$1" suffix="" head p_out=""
-  # `realpath -m` (coreutils) handles missing components; readlink -f needs the final one to exist.
-  if command -v realpath >/dev/null 2>&1 && p_out="$(realpath -m -- "$p" 2>/dev/null)" && [[ -n "$p_out" ]]; then
-    printf '%s\n' "${p_out%/}"; return 0
-  fi
-  head="$p"
-  while [[ ! -e "$head" && "$head" != "/" ]]; do
-    suffix="/$(basename "$head")$suffix"
-    head="$(dirname "$head")"
-  done
-  if [[ -e "$head" ]]; then
-    local real
-    real="$(cd "$head" 2>/dev/null && pwd -P)" || real="$head"
-    p="${real}${suffix}"
-  fi
-  # Collapse `x/../` lexically — harmless here because every component already exists.
-  while [[ "$p" == *"/../"* ]]; do p="${p/\/..\//\/}"; done
-  [[ "$p" == */.. ]] && p="$(dirname "$p")"
-  [[ "$p" == //* ]] && p="${p#/}"
-  printf '%s\n' "${p%/}"
-}
 
 # ── 1. bun ──────────────────────────────────────────────────────────────────
 section "Runtime"

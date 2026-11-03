@@ -18,7 +18,9 @@ import { normalizeBindIp, isTcpPortFree, isValidPort } from "../services/net";
 import { rediscoverWorlds } from "../minecraft/worlds";
 import type { ConsoleLine, ServerMetrics, ServerStatus } from "../shared/types";
 import type { RuntimeState } from "./types";
-import { findJavaProcessForDirectory, invalidateForeignProcessCache, isProcessAlive } from "./orphans";
+import {
+  findJavaProcessForDirectory, invalidateForeignProcessCache, isProcessAlive, isSameProcess, processStartMark,
+} from "./orphans";
 import {
   attachRelay, cleanRelayFiles, isRelayAlive, readRelayState, startRelay, type RelayConnection,
 } from "./relay-client";
@@ -127,7 +129,7 @@ function ensureEntry(serverId: number): ManagedProcess {
   if (!entry) {
     entry = {
       state: {
-        serverId, status: "offline", pid: null, startedAt: null, stoppingAt: null, exitCode: null,
+        serverId, status: "offline", pid: null, pidMark: null, startedAt: null, stoppingAt: null, exitCode: null,
         lastError: null, console: [], players: new Map(), ready: false, stopKind: null,
         cgroupAttached: false, enforcementMessage: null, foreign: false,
       },
@@ -441,7 +443,12 @@ function withLock<T>(serverId: number, fn: () => Promise<T>): Promise<T> {
 }
 
 export async function startServer(serverId: number, actor = "system"): Promise<void> {
-  return withLock(serverId, async () => {
+  return withLock(serverId, () => startServerUnlocked(serverId, actor));
+}
+
+/** The body of `startServer`, without the lock — for callers that already hold it (restart). */
+async function startServerUnlocked(serverId: number, actor: string): Promise<void> {
+  {
     const entry = ensureEntry(serverId);
     const server = getServerRow(serverId);
     if (["starting", "online", "stopping", "restarting"].includes(entry.state.status)) {
@@ -647,7 +654,7 @@ export async function startServer(serverId: number, actor = "system"): Promise<v
       type: "server.start", serverId, target: server.name, actorName: actor,
       metadata: { java: server.java_major, memoryMb: server.memory_mb, cpuPercent: server.cpu_percent },
     });
-  });
+  }
 }
 
 function readStream(
@@ -833,6 +840,20 @@ async function forceKill(serverId: number, actor: string): Promise<void> {
     systemLine(serverId, "cgroup.kill issued for the server's cgroup.");
   }
   const rootPid = entry.state.pid;
+  const rootMark = entry.state.pidMark;
+  /*
+   * Refuse to signal a pid that is no longer the process we recorded. Adoption reads the pid from a
+   * directory-substring match, and a pid can be recycled between then and the kill — SIGKILL on the
+   * wrong process is unrecoverable.
+   */
+  if (rootPid && !isSameProcess(rootPid, rootMark)) {
+    systemLine(serverId, `Pid ${rootPid} now belongs to a different process — not signalling it.`);
+    entry.state.pid = null;
+    entry.state.pidMark = null;
+    entry.state.foreign = false;
+    setStatus(serverId, "offline");
+    return;
+  }
   if (rootPid) {
     try {
       if (process.platform === "win32") {
@@ -875,16 +896,24 @@ async function forceKill(serverId: number, actor: string): Promise<void> {
 
   entry.stoppingRequested = true;
   entry.state.stopKind = "forced";
+  /*
+   * An adopted JVM produces no exit event, so the entry has to be settled by hand. The old timer did
+   * that unconditionally 1500 ms later — after the per-server lock had been released — so a Start in
+   * that window was overwritten while the new JVM was already running. Only clear the state if the
+   * entry still describes the process this kill was about.
+   */
   setTimeout(() => {
     const current = managed.get(serverId);
-    if (current && current.state.status !== "offline") {
-      current.process = null;
-      current.state.pid = null;
-      current.state.startedAt = null;
-      // Killing an adopted JVM produces no exit event, so the "not ours" flag has to be cleared here.
-      current.state.foreign = false;
-      setStatus(serverId, "offline");
-    }
+    if (!current) return;
+    if (current.process || current.state.pid !== rootPid) return;      // a new process took over
+    if (current.state.status === "offline") return;
+    current.process = null;
+    current.state.pid = null;
+    current.state.pidMark = null;
+    current.state.startedAt = null;
+    // Killing an adopted JVM produces no exit event, so the "not ours" flag has to be cleared here.
+    current.state.foreign = false;
+    setStatus(serverId, "offline");
   }, 1500);
   recordActivity({ type: "server.killed", serverId, target: `server #${serverId}`, actorName: actor, result: "info" });
 }
@@ -905,43 +934,55 @@ function collectTree(pid: number): number[] {
   return out;
 }
 
+/**
+ * Restart = stop + start, as one indivisible step.
+ *
+ * This used to be the only lifecycle action *not* wrapped in `withLock`, so a Stop or a Start that
+ * arrived mid-restart interleaved with it. It now holds the per-server lock for the whole sequence
+ * and calls the unlocked internals directly — calling `startServer` from inside the lock would wait
+ * for a lock it already holds and deadlock.
+ */
 export async function restartServer(serverId: number, actor = "system", opts: { force?: boolean } = {}): Promise<void> {
-  const entry = ensureEntry(serverId);
-  const server = getServerRow(serverId);
-  if (!entry.process) {
-    await startServer(serverId, actor);
-    return;
-  }
-  entry.restarting = true;
-  setStatus(serverId, "stopping");
-  recordActivity({ type: "server.restart", serverId, target: server.name, actorName: actor });
-  systemLine(serverId, "Restart requested — stopping the server first.");
-
-  await new Promise<void>((resolve) => {
-    const startedAt = Date.now();
-    entry.stoppingRequested = true;
+  return withLock(serverId, async () => {
+    const entry = ensureEntry(serverId);
+    const server = getServerRow(serverId);
+    if (!entry.process && !entry.state.pid) {
+      await startServerUnlocked(serverId, actor);
+      return;
+    }
     entry.restarting = true;
-    sendCommandRaw(serverId, "stop");
-    const poll = setInterval(() => {
-      const current = managed.get(serverId);
-      if (!current?.process) {
-        clearInterval(poll);
-        resolve();
-        return;
-      }
-      if (Date.now() - startedAt > 45_000) {
-        clearInterval(poll);
-        void forceKill(serverId, "restart-timeout");
-        setTimeout(resolve, 2000);
-      }
-    }, 500);
-  });
+    setStatus(serverId, "stopping");
+    recordActivity({ type: "server.restart", serverId, target: server.name, actorName: actor });
+    systemLine(serverId, "Restart requested — stopping the server first.");
 
-  entry.restarting = false;
-  entry.stoppingRequested = false;
-  setStatus(serverId, "offline");
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  await startServer(serverId, actor);
+    await new Promise<void>((resolve) => {
+      const startedAt = Date.now();
+      entry.stoppingRequested = true;
+      entry.restarting = true;
+      if (entry.process) sendCommandRaw(serverId, "stop");
+      const poll = setInterval(() => {
+        const current = managed.get(serverId);
+        if (!current?.process) {
+          clearInterval(poll);
+          resolve();
+          return;
+        }
+        // `force` skips the graceful window entirely — that is what the button says it does.
+        const patience = opts.force ? 3_000 : 45_000;
+        if (Date.now() - startedAt > patience) {
+          clearInterval(poll);
+          void forceKill(serverId, opts.force ? "restart-forced" : "restart-timeout");
+          setTimeout(resolve, opts.force ? 500 : 2000);
+        }
+      }, 500);
+    });
+
+    entry.restarting = false;
+    entry.stoppingRequested = false;
+    setStatus(serverId, "offline");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await startServerUnlocked(serverId, actor);
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1130,7 +1171,7 @@ export function reconcileForeignProcesses(): { adopted: number; released: number
     if (entry?.state.status === "installing") continue; // installer owns the directory
 
     if (entry?.state.foreign && entry.state.pid) {
-      if (!isProcessAlive(entry.state.pid)) {
+      if (!isSameProcess(entry.state.pid, entry.state.pidMark)) {
         entry.state.pid = null;
         entry.state.startedAt = null;
         entry.state.foreign = false;
@@ -1145,6 +1186,8 @@ export function reconcileForeignProcesses(): { adopted: number; released: number
     if (!found) continue;
     const target = ensureEntry(row.id);
     target.state.pid = found.pid;
+    // Remember *which* process this pid was, so a recycled pid is never signalled later.
+    target.state.pidMark = processStartMark(found.pid);
     target.state.startedAt = found.startedAt;
     target.state.foreign = true;
     target.state.ready = false;
@@ -1256,6 +1299,7 @@ export async function adoptRelays(): Promise<{ adopted: number; failed: number }
     entry.state.relayed = true;
     entry.state.foreign = false;
     entry.state.pid = connection.pid;
+    entry.state.pidMark = connection.pid ? processStartMark(connection.pid) : null;
     entry.state.startedAt = state.startedAt ?? Date.now();
     entry.state.exitCode = null;
     entry.state.ready = true;

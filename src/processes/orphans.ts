@@ -130,10 +130,57 @@ export function findJavaProcessForDirectory(directory: string): ForeignProcess |
 }
 
 export function isProcessAlive(pid: number): boolean {
+  // `process.kill(0, …)` signals the *whole process group* — i.e. the panel itself — and pid 1 is
+  // init. Neither is ever a server, so both are refused before the syscall is attempted.
+  if (!Number.isInteger(pid) || pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * A stable fingerprint of "the process with this pid, started at this moment".
+ *
+ * `isProcessAlive` only proves that *some* process owns the number. PIDs are recycled, and the panel
+ * adopts JVMs it did not spawn — so before signalling a pid it remembered from an earlier boot, it
+ * has to be sure it is the same process and not, say, the operator's editor. Linux exposes the start
+ * time in `/proc/<pid>/stat` field 22 (clock ticks since boot); Windows and macOS fall back to the
+ * process's start time from `ps`, and `null` means "cannot tell" — callers must then refuse to signal.
+ */
+export function processStartMark(pid: number): string | null {
+  if (!Number.isInteger(pid) || pid <= 1) return null;
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // The comm field may contain spaces and parentheses; everything after the last ")" is fixed.
+      const tail = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\s+/);
+      // tail[0] is field 3 (state), so field 22 is tail[19].
+      const started = tail[19];
+      return started && /^\d+$/.test(started) ? `linux:${started}` : null;
+    }
+    if (process.platform === "win32") {
+      const result = Bun.spawnSync(
+        ["powershell", "-NoProfile", "-Command", `(Get-Process -Id ${Number(pid)} -ErrorAction Stop).StartTime.ToUniversalTime().ToString("o")`],
+        { stdout: "pipe", stderr: "ignore" },
+      );
+      const value = result.stdout.toString().trim();
+      return value ? `win:${value}` : null;
+    }
+    const result = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(Number(pid))], { stdout: "pipe", stderr: "ignore" });
+    const value = result.stdout.toString().trim();
+    return value ? `ps:${value}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True only when the pid is alive *and* still the process we recorded. */
+export function isSameProcess(pid: number, mark: string | null | undefined): boolean {
+  if (!isProcessAlive(pid)) return false;
+  if (!mark) return true;                       // no fingerprint was recorded; liveness is all we have
+  const current = processStartMark(pid);
+  return current === null ? true : current === mark;
 }

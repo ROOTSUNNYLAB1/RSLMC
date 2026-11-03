@@ -166,9 +166,16 @@ function main(): void {
           /*
            * Constant-time compare: the token is the relay's only credential and it lives for the
            * whole life of the process, so a byte-by-byte `!==` is a comparison an attacker can time.
+           *
+           * `timingSafeEqual` *throws* `RangeError` when the buffers differ in length, and that call
+           * is not inside the `try` around `JSON.parse` — so `{"type":"hello","token":"x"}` crashed
+           * the relay (and orphaned the JVM it owns). Compare lengths first; the length of a
+           * constant token is not a secret.
            */
-          if (message?.type !== "hello" || typeof message?.token !== "string"
-            || !timingSafeEqual(Buffer.from(String(message.token)), Buffer.from(plan.token))) {
+          const presented = typeof message?.token === "string" ? Buffer.from(message.token) : null;
+          const expected = Buffer.from(plan.token);
+          if (message?.type !== "hello" || presented === null
+            || presented.length !== expected.length || !timingSafeEqual(presented, expected)) {
             socket.destroy();
             return;
           }
@@ -266,6 +273,23 @@ function main(): void {
   };
   process.on("SIGTERM", shutdownRelay);
   process.on("SIGINT", shutdownRelay);
+
+  /*
+   * Last line of defence. The relay owns a live JVM: if any handler throws, the process must not
+   * exit and orphan it. Log the error, keep relaying, and let the panel's own health check decide
+   * what to do. (R4 was exactly this: a stray `RangeError` from a malformed frame killed the relay.)
+   */
+  const errorLog = `${plan.statePath}.errors.log`;
+  const noteError = (error: unknown) => {
+    // A separate file on purpose: `statePath` is parsed as a single JSON object by the panel, so an
+    // appended line there would break the very state the relay exists to preserve.
+    try {
+      mkdirSync(dirname(errorLog), { recursive: true });
+      appendFileSync(errorLog, `${new Date().toISOString()} ${String(error)}\n`);
+    } catch { /* logging is best-effort */ }
+  };
+  process.on("uncaughtException", noteError);
+  process.on("unhandledRejection", noteError);
 }
 
 main();

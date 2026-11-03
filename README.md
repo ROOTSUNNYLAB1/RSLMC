@@ -1049,8 +1049,9 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (31 files, 265 tests)
-bun run tests/security/pentest.ts     # 140 adversarial checks against a throwaway instance
+bun run test                          # every suite, one process per file (36 files, 339 tests)
+bun run tests/security/pentest.ts     # 145 adversarial checks against a throwaway instance
+bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
 bun run typecheck                     # tsc --noEmit, strict
 ```
 

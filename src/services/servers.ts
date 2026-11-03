@@ -190,8 +190,27 @@ export function listServersForAllocation(userId: number): UserServerEntry[] {
 export interface AllocationInput {
   owner?: number[];
   shared?: number[];
+  /** Optional narrowing for a shared server: `{ [serverId]: Permission[] }`. */
+  scope?: Record<number, string[]>;
   /** Where a server goes when it is taken away from this account (servers always need an owner). */
   reassignOwnerTo?: number | null;
+}
+
+/**
+ * The permissions a shared grant carries on one server.
+ *
+ * Defaults to everything the account's *role* grants for that server, so a share behaves like before
+ * for the common case — but it is written down, so an administrator can see it and narrow it.
+ */
+function scopeFor(userId: number, serverId: number, override?: string[]): string[] {
+  if (override) return override;
+  const rolePermissions = new Set(
+    query<{ permission: string }>(
+      "SELECT DISTINCT rp.permission FROM user_roles ur JOIN role_permissions rp ON rp.role_id = ur.role_id WHERE ur.user_id = ?",
+      [userId],
+    ).map((row) => row.permission),
+  );
+  return [...rolePermissions].filter((permission) => permission.startsWith("server.") || permission === "*");
 }
 
 /**
@@ -260,7 +279,17 @@ export function setUserServerAccess(userId: number, input: AllocationInput): {
     );
     for (const id of wantedShared) {
       if (currentShared.has(id)) continue;
-      run("INSERT OR IGNORE INTO server_subusers (server_id, user_id) VALUES (?, ?)", [id, userId]);
+      /*
+       * The scope is written explicitly. `permissions` used to be left NULL and never read, so a
+       * shared grant silently meant "the account's whole role on this server". `scopeFor` narrows a
+       * share to the server-level permissions the role actually has — the administrator can tighten
+       * it further through `PUT /api/users/:id/servers` by passing `scope`.
+       */
+      run(
+        "INSERT INTO server_subusers (server_id, user_id, permissions) VALUES (?, ?, ?) "
+        + "ON CONFLICT(server_id, user_id) DO UPDATE SET permissions = excluded.permissions",
+        [id, userId, JSON.stringify(scopeFor(userId, id, input.scope?.[id]))],
+      );
       sharedAdded.push(id);
     }
     for (const id of currentShared) {

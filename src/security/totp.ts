@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -54,15 +54,41 @@ export function totpCode(secret: string, counter?: number): string {
   return String(binary % 1_000_000).padStart(6, "0");
 }
 
+/** The step whose code matched, or `null`. Tolerates one step of clock skew either way. */
+export function matchingTotpStep(secret: string, token: string, now = Date.now()): number | null {
+  const normalized = token.replace(/\s/g, "");
+  if (!/^\d{6}$/.test(normalized)) return null;
+  const step = Math.floor(now / 30000);
+  for (const offset of [-1, 0, 1]) {
+    if (totpCode(secret, step + offset) === normalized) return step + offset;
+  }
+  return null;
+}
+
 /** Accepts the current step plus one before/after to tolerate clock skew. */
 export function verifyTotp(secret: string, token: string): boolean {
-  const normalized = token.replace(/\s/g, "");
-  if (!/^\d{6}$/.test(normalized)) return false;
-  const step = Math.floor(Date.now() / 30000);
-  for (const offset of [-1, 0, 1]) {
-    if (totpCode(secret, step + offset) === normalized) return true;
+  return matchingTotpStep(secret, token) !== null;
+}
+
+/**
+ * Recovery codes, compared in constant time and matched case/format-insensitively.
+ *
+ * These were generated, stored and displayed but never checked anywhere, so an operator who lost
+ * their authenticator had no way back in — a feature the UI promised and the code did not have.
+ */
+export function normaliseRecoveryCode(input: string): string {
+  return input.replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+}
+
+export function recoveryCodeMatches(stored: string[], input: string): string | null {
+  const wanted = Buffer.from(normaliseRecoveryCode(input));
+  if (wanted.length === 0) return null;
+  for (const candidate of stored) {
+    const value = Buffer.from(normaliseRecoveryCode(candidate));
+    if (value.length !== wanted.length) continue;
+    if (timingSafeEqual(value, wanted)) return candidate;
   }
-  return false;
+  return null;
 }
 
 export function otpauthUrl(secret: string, username: string, issuer = "RSLMC"): string {

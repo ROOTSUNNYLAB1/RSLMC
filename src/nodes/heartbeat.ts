@@ -1,5 +1,6 @@
 import { query, run } from "../database";
-import { getNode, probeNode, nodeRequest, type NodeRow } from "./client";
+import { getNode, probeNode, nodeRequest, markNodeDown, type NodeRow } from "./client";
+import { resolveNodeHost } from "./address";
 
 /**
  * Keeps the Nodes page honest.
@@ -27,6 +28,16 @@ async function probeAll(): Promise<void> {
   running = true;
   try {
     for (const node of remoteNodes()) {
+      /*
+       * The stored address is re-checked on every beat. DNS can change under a hostname after the
+       * node was registered, and a name that used to point at a LAN box must not silently start
+       * pointing at a cloud metadata endpoint (the panel would then fetch it every 15 s forever).
+       */
+      const problem = await resolveNodeHost(node.fqdn).then((result: { problem: string | null }) => result.problem).catch(() => null);
+      if (problem) {
+        markNodeDown(node, `address refused: ${problem}`);
+        continue;
+      }
       try { await probeNode(node); } catch { /* probeNode records the failure itself */ }
     }
   } finally {

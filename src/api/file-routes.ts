@@ -1,14 +1,20 @@
-import { Router, json, badRequest } from "../shared/http";
+import { Router, json, badRequest, ApiException } from "../shared/http";
 import { requireServerAccess } from "../auth";
 import {
   listDirectory, readFile, writeFile, createDirectory, renameEntry, copyEntry, deleteEntries,
-  saveUpload, createArchive, extractArchive, searchFiles, fileStream,
+  saveUpload, createArchive, extractArchive, searchFiles, fileStream, MAX_UPLOAD_BYTES,
 } from "../services/files";
 import { recordActivity } from "../services/audit";
 import { PATHS } from "../shared/config";
 import { sanitizeRelative } from "../security/paths";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+
+/** Per-request ceiling: the multipart envelope is a little larger than the file itself. */
+function uploadLimitBytes(): number {
+  // A little slack for the multipart envelope (boundaries and the other form fields).
+  return MAX_UPLOAD_BYTES + Math.max(64 * 1024, Math.floor(MAX_UPLOAD_BYTES * 0.01));
+}
 
 /** `archive.tar.gz` → `.tar.gz`, `x.zip` → `.zip`; anything odd or absent → `.zip` (the safe default). */
 function extractExtension(name: string): string {
@@ -112,6 +118,20 @@ export function registerFileRoutes(api: Router): void {
     requireServerAccess(ctx.user, id, "server.files");
     const contentType = ctx.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) throw badRequest("A multipart/form-data upload is required");
+    /*
+     * Refuse an oversized body *before* `formData()` buffers it. The old check lived inside
+     * `saveUpload`, i.e. after the whole multipart body had already been read into memory, so the
+     * declared limit did not bound parse-time memory at all. `Content-Length` is advisory (chunked
+     * uploads omit it) — the post-parse check in `saveUpload` stays as the real enforcement.
+     */
+    const declared = Number(ctx.headers.get("content-length") ?? 0);
+    const ceiling = uploadLimitBytes();
+    if (Number.isFinite(declared) && declared > ceiling) {
+      throw new ApiException(
+        413, "upload_too_large",
+        `That upload is ${(declared / 1024 ** 2).toFixed(1)} MB; this server accepts at most ${(ceiling / 1024 ** 2).toFixed(0)} MB per request.`,
+      );
+    }
     const form = await ctx.req.formData();
     const path = String(form.get("path") ?? "");
     const file = form.get("file");

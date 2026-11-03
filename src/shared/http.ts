@@ -58,7 +58,12 @@ export interface Route {
   keys: string[];
   regex: RegExp;
   handler: Handler;
-  meta?: { public?: boolean; permission?: string; rateLimit?: { limit: number; windowMs: number } };
+  /*
+   * There used to be a `meta?: { public, permission, rateLimit }` field here. Nothing ever read it:
+   * routes are guarded inside their handlers (`requirePermission`, `requireServer`) and public routes
+   * are listed in `api/index.ts`. A route registered with `meta: { permission: … }` would have looked
+   * guarded and been wide open, so the field is gone rather than left as a trap.
+   */
 }
 
 export interface RequestContext {
@@ -79,7 +84,7 @@ export interface RequestContext {
 export class Router {
   private routes: Route[] = [];
 
-  add(method: string, pattern: string, handler: Handler, meta?: Route["meta"]): this {
+  add(method: string, pattern: string, handler: Handler): this {
     const keys: string[] = [];
     const regexSrc = pattern
       .split("/")
@@ -96,15 +101,15 @@ export class Router {
         return segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       })
       .join("/");
-    this.routes.push({ method, pattern, keys, regex: new RegExp(`^${regexSrc}$`), handler, meta });
+    this.routes.push({ method, pattern, keys, regex: new RegExp(`^${regexSrc}$`), handler });
     return this;
   }
 
-  get(p: string, h: Handler, m?: Route["meta"]) { return this.add("GET", p, h, m); }
-  post(p: string, h: Handler, m?: Route["meta"]) { return this.add("POST", p, h, m); }
-  put(p: string, h: Handler, m?: Route["meta"]) { return this.add("PUT", p, h, m); }
-  patch(p: string, h: Handler, m?: Route["meta"]) { return this.add("PATCH", p, h, m); }
-  delete(p: string, h: Handler, m?: Route["meta"]) { return this.add("DELETE", p, h, m); }
+  get(p: string, h: Handler) { return this.add("GET", p, h); }
+  post(p: string, h: Handler) { return this.add("POST", p, h); }
+  put(p: string, h: Handler) { return this.add("PUT", p, h); }
+  patch(p: string, h: Handler) { return this.add("PATCH", p, h); }
+  delete(p: string, h: Handler) { return this.add("DELETE", p, h); }
 
   match(method: string, pathname: string): { route: Route; params: Record<string, string> } | null {
     /*

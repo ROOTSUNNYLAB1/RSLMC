@@ -33,6 +33,11 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # install.sh is a release artifact: a syntax check does not prove it *runs*
+      # (v2026.11.02.1 shipped a call to a function defined 200 lines below it).
+      - name: Installer smoke test
+        run: bash scripts/installer-smoke.sh
+
       - name: Installer syntax and lint
         shell: bash
         run: |

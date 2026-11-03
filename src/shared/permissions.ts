@@ -25,7 +25,6 @@ export const PERMISSIONS = {
   "audit.view": "View audit logs",
   "system.manage": "Manage global system configuration",
   "java.manage": "Manage Java runtimes",
-  "security.manage": "Manage security settings",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -91,7 +90,7 @@ export const DEFAULT_ROLES = [
 export const DANGEROUS_PERMISSIONS: Permission[] = [
   "server.create", "server.delete", "server.settings", "server.allocations",
   "node.view", "node.manage", "user.view", "user.manage", "role.manage", "audit.view",
-  "system.manage", "java.manage", "security.manage",
+  "system.manage", "java.manage",
 ];
 
 /** True when a role grants anything from the administration area or any destructive server action. */

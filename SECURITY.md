@@ -206,6 +206,35 @@ reachable from the HTTP surface. Each fix has a check in `tests/security/pentest
 
 ---
 
+## 1g. Follow-up review, 2 November 2026 (R1–R4, O1–O6)
+
+A second review looked at `3b6efdd` and found four regressions — three of them mine — plus the
+round-one items that had been deferred. All of them are fixed here, and each one has a test that
+fails without the fix.
+
+| ID | Type | What was wrong | What it is now | Test |
+|---|---|---|---|---|
+| **R1** | Blocker | `install.sh` called `canonical_path` 200 lines before it was defined, so **every** install and upgrade aborted at step `[2/14]`. `bash -n` and shellcheck both pass on that | the helper is defined above its first use; `scripts/installer-smoke.sh` runs the real installer in `--dry-run --unattended` mode (four path shapes) and checks the definition order of every helper. Wired into CI and into `bun run test` | `tests/installer.test.ts` |
+| **R2** | High | The node proxy demanded `server.settings` for the EULA, the startup preset and BlueMap setup, while the local routes ask for `server.start`, `server.startup` and `server.plugins`. The built-in `User` role has the latter and not the former, so the same account could accept the EULA locally and got 403 on a remote server | one table, `src/shared/server-permissions.ts`, shared by both paths; `tests/server-permissions.test.ts` parses `api/server-routes.ts` and fails if they ever disagree again; `tests/nodes.test.ts` drives the real proxy as a plain `User` | `tests/server-permissions.test.ts`, `tests/nodes.test.ts` |
+| **R3** | Low | "Deny by default" was actually "default to `server.settings`": the trailing `{ prefix: "" }` row matched everything, so the `if (!hit)` branch was unreachable | the catch-all row is gone; an unlisted write is refused with `unsupported_action`, and the test asserts there is no catch-all | `tests/server-permissions.test.ts` |
+| **R4** | Medium | `timingSafeEqual` throws `RangeError` on unequal lengths — introduced by the L8 fix — so `{"type":"hello","token":"x"}` killed the relay process and orphaned the JVM it owned | lengths compared first, plus `uncaughtException`/`unhandledRejection` handlers that log to `<state>.errors.log` instead of exiting | `tests/relay.test.ts` (sends the exact frame) |
+| **O1** | Medium | Pid reuse on adoption; the `forceKill` timer nulled state 1500 ms after the lock was released, clobbering a Start; `restartServer` was the only lifecycle action outside `withLock` | every adopted/spawned pid carries a kernel start-time fingerprint (`processStartMark`) and is only signalled when the fingerprint still matches; the kill timer only clears the state it was started for; restart holds the lock and uses the unlocked internals (calling the locked `startServer` from inside the lock would deadlock); `isProcessAlive(0)` no longer signals the panel's own process group | `tests/process-identity.test.ts` |
+| **O2** | Low | TOTP codes were replayable inside their 90 s window, wrong codes did not count toward the lockout, and recovery codes were generated, shown and **never verified** | `totp_last_step` ledger (migration 014), failed codes increment `failed_attempts`/`locked_until`, recovery codes are matched in constant time and consumed on use; the login form accepts them | `tests/totp.test.ts` |
+| **O3** | Low | `server_subusers.permissions` was written nowhere and read nowhere: every sub-user got the account's full role on that server | the scope is written when a share is granted (the role's server-level permissions, or an explicit `scope` map on `PUT /api/users/:id/servers`) and enforced in `requireServerAccess` | pentest `followup.o3` |
+| **O4** | Low | A node `fqdn` was re-probed every 15 s with only a loopback+same-port check, so a URL pointing at a cloud metadata service was a permanent SSRF | `src/nodes/address.ts` refuses link-local/metadata ranges (`169.254.0.0/16`, `100.100.100.200`, `fd00:ec2::254`) and wildcard addresses, resolves hostnames before storing them, and re-checks the host on **every heartbeat** so a DNS change cannot quietly redirect the panel. LAN addresses stay allowed — that is what multi-node is for | `tests/node-address.test.ts` |
+| **O5** | Low | Dead code, including two traps: `Route.meta` looked like an authorisation hook and was never read; `security.manage` was declared and required by no route | both removed. The remaining ~330 lines of unused exports are listed in the archive review and can go incrementally without touching behaviour | — |
+| **O6** | Low | Directories were created without charging the extraction budget (an archive of empty folders defeated the 200k guard), and uploads were measured only after `formData()` had buffered the whole body | directories are charged; the upload route refuses an oversized `Content-Length` **before** parsing (the post-parse check stays as the real enforcement, since `Content-Length` is advisory) | pentest `followup.o6` |
+
+**Not changed, on purpose**
+
+* **Cloud metadata blocking is not configurable.** There is no legitimate reason to register one as a
+  node; an operator who needs it can patch the list.
+* **The node agent key is still node-wide.** Per-endpoint scoping would be a protocol change between
+  panels; a leaked key owns that one node (documented in §3), and the key is never returned by any read
+  endpoint (checked by `node.8`).
+
+---
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |
@@ -271,8 +300,9 @@ reachable from the HTTP surface. Each fix has a check in `tests/security/pentest
 ```bash
 cd rslmc
 bun install
-bun test                              # 265 unit/integration tests (31 files)
-bun run tests/security/pentest.ts     # 140 adversarial checks against a throwaway instance
+bun test                              # 339 unit/integration tests (36 files)
+bun run tests/security/pentest.ts     # 145 adversarial checks against a throwaway instance
+bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```
 
 The harness creates its own data directory in `$TMPDIR`, boots the panel on port 3941, seeds two

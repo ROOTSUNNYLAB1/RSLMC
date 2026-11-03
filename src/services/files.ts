@@ -11,7 +11,13 @@ import { parseProperties, escapePropertyValue } from "../minecraft/properties";
 import type { FileEntry } from "../shared/types";
 
 const MAX_EDIT_BYTES = 5 * 1024 * 1024;
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * Per-file upload ceiling (default 2 GB). Exported so the upload route can refuse an oversized body
+ * *before* `formData()` buffers it; `RSLMC_UPLOAD_MAX_MB` exists so an operator — or a test — can set
+ * a smaller limit without recompiling.
+ */
+export const MAX_UPLOAD_BYTES =
+  Math.max(1, Number(process.env.RSLMC_UPLOAD_MAX_MB ?? 2048)) * 1024 * 1024;
 
 export function serverRoot(serverId: number): string {
   const server = queryOne<{ uuid: string }>("SELECT uuid FROM servers WHERE id = ?", [serverId]);
@@ -195,7 +201,9 @@ export function deleteEntries(serverId: number, paths: string[], opts: { protect
 }
 
 export async function saveUpload(serverId: number, path: string, file: File, opts: { overwrite?: boolean } = {}): Promise<{ path: string; size: number }> {
-  if (file.size > MAX_UPLOAD_BYTES) throw new ApiException(413, "file_too_large", "Upload exceeds the 2 GB limit");
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new ApiException(413, "file_too_large", `Upload exceeds the ${Math.round(MAX_UPLOAD_BYTES / 1024 ** 2)} MB limit`);
+  }
   const root = serverRoot(serverId);
   const target = resolveServerPath(root, path);
   if (existsSync(target) && !opts.overwrite) throw new ApiException(409, "exists", "A file with that name already exists");

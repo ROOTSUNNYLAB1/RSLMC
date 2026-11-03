@@ -17,6 +17,7 @@ import { backupStorageSummary } from "../services/backups";
 import { pruneOldMetrics } from "../database";
 import { recordAudit } from "../services/audit";
 import { publicNode, assertNoSelfLoop } from "./node-routes";
+import { assertNodeHostAllowed } from "../nodes/address";
 import { getNode, probeNode } from "../nodes/client";
 import { generateAgentKey } from "../nodes/agent";
 import { registrationAdminView, writeRegistrationConfig } from "../services/registration";
@@ -312,6 +313,13 @@ export function registerAdminRoutes(api: Router): void {
       { scheme: input.scheme!, fqdn: input.fqdn!, port: input.port! } as any,
       PORT,
     );
+    /*
+     * The address is fetched again every 15 s for as long as the node exists, so it is validated once
+     * here: no loopback, no cloud metadata endpoints (169.254.169.254, 100.100.100.200, fd00:ec2::254)
+     * — and, for a hostname, no *resolved* address in those ranges either. A LAN address is fine; that
+     * is the normal multi-node setup.
+     */
+    await assertNodeHostAllowed(input.fqdn!);
 
     /*
      * The agent key is generated here and shown exactly once. It is stored on the controller (it has
@@ -481,15 +489,30 @@ export function registerAdminRoutes(api: Router): void {
     const user = findUserById(userId);
     if (!user) throw notFound("User not found");
     if (user.is_root) throw badRequest("Root administrators already have access to every server.");
-    const body = await ctx.body<{ owner?: number[]; shared?: number[] }>();
+    const body = await ctx.body<{ owner?: number[]; shared?: number[]; scope?: Record<string, string[]> }>();
     const toIds = (value: unknown): number[] => {
       if (value === undefined || value === null) return [];
       if (!Array.isArray(value)) throw badRequest("owner and shared must be arrays of server ids");
       return value.map((entry) => Number(entry)).filter((entry) => Number.isInteger(entry) && entry > 0);
     };
+    /*
+     * `scope` narrows a shared grant on a per-server basis (`{ "12": ["server.view","server.console"] }`).
+     * Without it a share carries the account's own server-level role permissions — written down
+     * explicitly now, instead of the NULL column that made every sub-user unrestricted.
+     */
+    const scope: Record<number, string[]> = {};
+    for (const [key, value] of Object.entries(body.scope ?? {})) {
+      const serverId = Number(key);
+      if (!Number.isInteger(serverId) || serverId <= 0) throw badRequest("scope keys must be server ids");
+      if (!Array.isArray(value)) throw badRequest("scope values must be arrays of permissions");
+      const unknown = value.filter((permission) => !ALL_PERMISSIONS.includes(permission as any));
+      if (unknown.length > 0) throw badRequest(`Unknown permission(s) in scope: ${unknown.slice(0, 3).join(", ")}`);
+      scope[serverId] = [...new Set(value.map(String))];
+    }
     const result = setUserServerAccess(userId, {
       owner: toIds(body.owner),
       shared: toIds(body.shared),
+      scope,
       // Taking a server away from an account hands it to the administrator doing the change.
       reassignOwnerTo: ctx.user!.id,
     });

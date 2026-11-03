@@ -85,6 +85,18 @@ async function login(base: string): Promise<{ cookie: string; csrf: string }> {
   return { cookie, csrf: me.csrfToken ?? me.session?.csrfToken ?? "" };
 }
 
+async function loginAs(base: string, username: string, password: string): Promise<{ cookie: string; csrf: string }> {
+  const response = await fetch(`${base}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (response.status !== 200) throw new Error(`login ${username} on ${base} failed: ${response.status}`);
+  const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0]!;
+  const me = await (await fetch(`${base}/api/auth/me`, { headers: { cookie } })).json() as any;
+  return { cookie, csrf: me.csrfToken ?? "" };
+}
+
 function call(base: string, cookie: string, csrf: string, path: string, init: { method?: string; body?: unknown } = {}) {
   return fetch(`${base}${path}`, {
     method: init.method ?? "GET",
@@ -242,6 +254,73 @@ describe("servers on a remote node", () => {
     const local = controllerDb.query("SELECT memory_mb FROM servers WHERE id = ?").get(serverId) as any;
     controllerDb.close();
     expect(local.memory_mb).toBe(1536);
+  }, 60_000);
+
+
+  /*
+   * R2 (round 51 follow-up): the proxy used to demand `server.settings` for the EULA, the startup
+   * preset and BlueMap setup, while the local routes ask for `server.start`, `server.startup` and
+   * `server.plugins`. The built-in `User` role holds the latter three and *not* the former, so the
+   * same account could accept the EULA locally and got 403 on a remote server. This drives the real
+   * proxy as a plain `User` account that owns the remote server.
+   */
+  test("a plain User can accept the EULA and read the startup options on a remote server", async () => {
+    // A real (non-root) account with the default `User` role, then hand it the remote server.
+    const created = await call(CONTROLLER, controllerCookie, controllerCsrf, "/api/users", {
+      method: "POST",
+      body: { username: "remoteuser", password: "Str0ngPass!23", roles: ["User"] },
+    });
+    expect(created.status).toBe(201);
+    const remoteUserId = ((await created.json()) as any).id as number;
+
+    const controllerDb = new Database(join(CONTROLLER_DIR, "database", "rslmc.db"), { readwrite: true });
+    const previousOwner = (controllerDb.query("SELECT owner_id FROM servers WHERE id = ?").get(serverId) as any).owner_id;
+    controllerDb.run("UPDATE servers SET owner_id = ? WHERE id = ?", [remoteUserId, serverId]);
+    controllerDb.close();
+
+    const plain = await loginAs(CONTROLLER, "remoteuser", "Str0ngPass!23");
+    const perms = await (await fetch(`${CONTROLLER}/api/auth/me`, { headers: { cookie: plain.cookie } })).json() as any;
+    expect(perms.user.isRoot).toBe(false);
+    expect(perms.user.permissions).not.toContain("server.settings");
+
+    const eula = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}/eula`, {
+      method: "POST",
+      body: { accept: true },
+    });
+    // The proxy must not refuse it; the node answers 200 or a business error of its own.
+    expect([401, 403]).not.toContain(eula.status);
+
+    const startupRead = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}/startup-options`);
+    expect([401, 403]).not.toContain(startupRead.status);
+
+    const startupWrite = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}/startup-options`, {
+      method: "PUT",
+      body: { preset: "aikars" },
+    });
+    expect([401, 403]).not.toContain(startupWrite.status);
+
+    // ...and the things a User genuinely may not do stay refused, remotely exactly as locally.
+    const denied = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}`, {
+      method: "PATCH",
+      body: { memoryMb: 2048 },
+    });
+    expect(denied.status).toBe(403);
+
+    // An unlisted write is refused, not guessed as `server.settings` (R3).
+    const unknown = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}/frobnicate`, {
+      method: "POST",
+      body: { x: 1 },
+    });
+    expect(unknown.status).toBe(403);
+    expect(((await unknown.json()) as any).error.code).toBe("unsupported_action");
+
+    // The same two checks make sense locally, so a future drift fails on both sides.
+    const localDenied = await call(CONTROLLER, plain.cookie, plain.csrf, `/api/servers/${serverId}/settings`);
+    expect(localDenied.status).toBe(403);
+
+    const restore = new Database(join(CONTROLLER_DIR, "database", "rslmc.db"), { readwrite: true });
+    restore.run("UPDATE servers SET owner_id = ? WHERE id = ?", [previousOwner, serverId]);
+    restore.close();
   }, 60_000);
 
   test("an offline node cannot silently accept a server", async () => {

@@ -347,19 +347,21 @@ export function LoginPage({ setup }: { setup: SetupInfo | null }) {
             <Field
               label="Two-factor code"
               hint={ssoTicket
-                ? "Your provider sign-in worked — enter the 6-digit code from your authenticator app to finish."
-                : "Six digits from your authenticator app."}
+                ? "Your provider sign-in worked — enter the 6-digit code from your authenticator app to finish (or one of your recovery codes)."
+                : "Six digits from your authenticator app — or a recovery code if you have lost it."}
             >
               <span className="input-icon">
                 <KeyRound size={14} className="lead" aria-hidden />
                 <Input
                   value={totp}
-                  onChange={(event) => setTotp(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  inputMode="numeric"
+                  // Accepted: a 6-digit code, or a recovery code (`abcde-fghij`, stored case-insensitively).
+                  onChange={(event) => setTotp(event.target.value.replace(/[^0-9a-zA-Z-]/g, "").slice(0, 14))}
+                  inputMode={totp.replace(/[^0-9]/g, "").length === totp.length ? "numeric" : "text"}
                   autoComplete="one-time-code"
                   placeholder="000000"
                   autoFocus
                   className="input-otp"
+                  maxLength={14}
                 />
               </span>
             </Field>
@@ -371,6 +373,7 @@ export function LoginPage({ setup }: { setup: SetupInfo | null }) {
             type="submit"
             variant="primary"
             loading={busy}
+            disabled={(requiresTotp || Boolean(ssoTicket)) && totp.trim().length === 0}
             icon={<LogIn size={14} />}
             className="btn-block auth-submit"
           >

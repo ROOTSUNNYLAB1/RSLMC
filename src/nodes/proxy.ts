@@ -6,6 +6,7 @@ import { nodeRequest, rewriteForNode, getNode, markNodeDown, type NodeRow } from
 import type { Permission } from "../shared/permissions";
 import { recordActivity } from "../services/audit";
 import { checkOrigin } from "../security/origin";
+import { serverPermissionFor, permissionSatisfied, describePermission } from "../shared/server-permissions";
 import { rateLimit } from "../security/ratelimit";
 
 /**
@@ -20,82 +21,15 @@ import { rateLimit } from "../security/ratelimit";
  * look interesting to another.
  */
 
-/**
- * Which permission a per-server sub-path needs — an explicit table, deny by default.
- *
- * The node applies a forwarded request as its own administrator (`nodeControllerUser()`), so this
- * table *is* the authorisation boundary for remote servers. It used to fall through to
- * `server.view` for anything it did not recognise, which handed `PATCH /api/servers/<id>` (memory,
- * JVM arguments, port), `/reinstall`, `/startup-options`, `/map/setup` and `/eula` to an account that
- * could only read. It also decided the power action from the URL, where `/power` never contains it.
- *
- * Rules:
- *   · Reads fall back to `server.view` — read-only, and the local routes agree.
- *   · Writes are enumerated. Anything not in the table is refused (`null`), never guessed.
- *   · `POST /power` is decided by the request body's `action`.
+/*
+ * Authorisation for a forwarded request lives in `shared/server-permissions.ts` — the same table the
+ * local routes are checked against by `tests/server-permissions.test.ts`. This file used to carry its
+ * own map, and it drifted: it asked for `server.settings` on the EULA and the startup preset (which
+ * the default `User` role does not have), so the same account could accept the EULA on a local server
+ * and got 403 on a remote one. It also defaulted unlisted writes to `server.view` instead of refusing.
  */
-const READ_FALLBACK: Permission = "server.view";
-
-/** Write paths, longest prefix first. `""` is the server itself. */
-const WRITE_TABLE: Array<{ prefix: string; permission: Permission }> = [
-  { prefix: "/backups/", permission: "server.backups" },
-  { prefix: "/backups", permission: "server.backups" },
-  { prefix: "/schedules", permission: "server.schedules" },
-  { prefix: "/players", permission: "server.players" },
-  { prefix: "/worlds", permission: "server.worlds" },
-  { prefix: "/plugins", permission: "server.plugins" },
-  { prefix: "/marketplace", permission: "server.plugins" },
-  { prefix: "/properties", permission: "server.files" },
-  { prefix: "/files", permission: "server.files" },
-  { prefix: "/allocations", permission: "server.allocations" },
-  { prefix: "/settings", permission: "server.settings" },
-  { prefix: "/startup-options", permission: "server.settings" },
-  { prefix: "/reinstall", permission: "server.settings" },
-  { prefix: "/eula", permission: "server.settings" },
-  { prefix: "/map/setup", permission: "server.settings" },
-  { prefix: "/map", permission: "server.view" },
-  { prefix: "/console", permission: "server.command" },
-  { prefix: "", permission: "server.settings" },
-];
-
-/** Maps a `POST /power` body action to the permission the local route would check. */
-const POWER_ACTIONS: Record<string, Permission> = {
-  start: "server.start",
-  restart: "server.restart",
-  stop: "server.stop",
-  kill: "server.kill",
-};
-
-export interface PermissionLookup {
-  /** `null` means "this panel does not forward this write" — fail closed, not open. */
-  permission: Permission | null;
-  /** Present when the answer is `null`, for the log line and the 403 message. */
-  reason?: string;
-}
-
-export function permissionForPath(method: string, subPath: string, body?: unknown): PermissionLookup {
-  const path = subPath.split("?")[0]!.toLowerCase();
-  const write = method !== "GET" && method !== "HEAD";
-  if (!write) {
-    // Reads are enumerated only to pick a *narrower* permission than view where one is meant.
-    if (path.startsWith("/files")) return { permission: "server.files" };
-    if (path.startsWith("/backups")) return { permission: "server.backups" };
-    if (path.startsWith("/schedules")) return { permission: "server.schedules" };
-    if (path.startsWith("/worlds")) return { permission: "server.worlds" };
-    if (path.startsWith("/allocations")) return { permission: "server.allocations" };
-    if (path.startsWith("/startup-options")) return { permission: "server.settings" };
-    return { permission: READ_FALLBACK };
-  }
-  if (path.startsWith("/power")) {
-    const action = String((body as { action?: unknown } | undefined)?.action ?? "").toLowerCase();
-    const permission = POWER_ACTIONS[action];
-    if (!permission) return { permission: null, reason: `unknown power action “${action || "(none)"}”` };
-    return { permission };
-  }
-  if (path.startsWith("/console")) return { permission: "server.command" };
-  const hit = WRITE_TABLE.find((row) => row.prefix === "" || path.startsWith(row.prefix));
-  if (!hit) return { permission: null, reason: `no permission rule for ${method} ${path || "/"}` };
-  return { permission: hit.permission };
+function proxyTargetPath(serverId: number, subPath: string): string {
+  return `/api/servers/${serverId}${subPath.split("?")[0] ?? ""}`;
 }
 
 export interface ProxyOutcome {
@@ -182,20 +116,21 @@ export async function proxyServerRequest(req: Request, url: URL, clientIp: strin
     }
   }
 
-  const lookup = permissionForPath(req.method, subPath, peeked);
+  const lookup = serverPermissionFor(req.method, proxyTargetPath(serverId, subPath), peeked);
   if (!lookup.permission) {
+    // Deny by default: an unlisted write is refused here rather than guessed.
     return json(
       {
         error: {
           code: "unsupported_action",
-          message: `RSLMC will not forward ${req.method} ${subPath || "/"} to a remote node (${lookup.reason}).`,
+          message: `RSLMC will not forward ${req.method} ${subPath || "/"} to a remote node — ${lookup.reason ?? "no permission rule matches it"}.`,
         },
       },
       { status: 403 },
     );
   }
-  const needed = lookup.permission;
-  if (!hasPermission(user, needed)) {
+  if (!permissionSatisfied(lookup.permission, user.permissions)) {
+    const needed = describePermission(lookup.permission);
     return json({ error: { code: "forbidden", message: `You need the "${needed}" permission for this action.` } }, { status: 403 });
   }
   if (!canAccessServer(user, serverId)) {

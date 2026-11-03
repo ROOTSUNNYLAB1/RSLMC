@@ -20,6 +20,7 @@ interface UserRow {
   totp_secret: string | null;
   totp_enabled: number;
   totp_recovery: string | null;
+  totp_last_step: number | null;
   disabled: number;
   avatar_color: string;
   avatar_file: string | null;
@@ -121,9 +122,46 @@ export async function login(
   if (user.disabled) throw new AuthError(403, "account_disabled", "This account has been disabled");
   if (user.totp_enabled === 1) {
     if (!totp) throw new AuthError(401, "totp_required", "Two-factor authentication code required");
-    const { verifyTotp } = await import("../security/totp");
-    if (!verifyTotp(user.totp_secret ?? "", totp)) {
-      throw new AuthError(401, "invalid_totp", "Invalid two-factor authentication code");
+    const { matchingTotpStep, recoveryCodeMatches } = await import("../security/totp");
+
+    /*
+     * Three things the second factor was missing:
+     *   1. a *replay ledger* — a 6-digit code stays valid for up to 90 s and could be reused;
+     *   2. recovery codes — they were generated and shown but never accepted anywhere;
+     *   3. lockout — a wrong code did not count, so guessing was limited only by the IP limiter.
+     */
+    const code = totp.trim();
+    const step = code.replace(/\s/g, "").match(/^\d{6}$/) ? matchingTotpStep(user.totp_secret ?? "", code) : null;
+    const lastStep = user.totp_last_step ?? null;
+    const replayed = step !== null && lastStep !== null && step <= lastStep;
+
+    let usedRecovery: string | null = null;
+    if (step === null || replayed) {
+      const stored: string[] = (() => {
+        try { return JSON.parse(user.totp_recovery ?? "[]") as string[]; } catch { return []; }
+      })();
+      usedRecovery = recoveryCodeMatches(stored, code);
+      if (!usedRecovery) {
+        const attempts = user.failed_attempts + 1;
+        const lockUntil = attempts >= 8 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+        run("UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?", [attempts, lockUntil, user.id]);
+        throw new AuthError(
+          401, "invalid_totp",
+          replayed
+            ? "That code has already been used. Wait for your authenticator to show the next one."
+            : "Invalid two-factor authentication code",
+        );
+      }
+      // A recovery code is single-use: consume it before the session is minted.
+      const remaining = (() => {
+        try {
+          const stored: string[] = JSON.parse(user.totp_recovery ?? "[]");
+          return stored.filter((entry) => entry !== usedRecovery);
+        } catch { return [] as string[]; }
+      })();
+      run("UPDATE users SET totp_recovery = ? WHERE id = ?", [JSON.stringify(remaining), user.id]);
+    } else if (step !== null) {
+      run("UPDATE users SET totp_last_step = ? WHERE id = ?", [step, user.id]);
     }
   }
 
@@ -254,10 +292,47 @@ export function canAccessServer(user: UserPublic | undefined, serverId: number):
   return Boolean(shared);
 }
 
+/**
+ * The permissions a *sub-user* was granted on one server, or `null` when the user is not a sub-user.
+ *
+ * `server_subusers.permissions` existed since the first migration and was never read, so every
+ * sub-user silently inherited their panel role's full server access. An empty/NULL column keeps that
+ * behaviour for rows created before this check (a migration cannot know what an operator intended),
+ * but `setUserServers` now writes the scope explicitly and `requirePermission` honours it.
+ */
+export function subuserPermissions(userId: number, serverId: number): string[] | null {
+  const row = queryOne<{ permissions: string | null }>(
+    "SELECT permissions FROM server_subusers WHERE server_id = ? AND user_id = ?",
+    [serverId, userId],
+  );
+  if (!row) return null;
+  if (!row.permissions) return null;                    // legacy row: panel role applies in full
+  try {
+    const parsed = JSON.parse(row.permissions);
+    return Array.isArray(parsed) ? parsed.map(String) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function requireServerAccess(user: UserPublic | undefined, serverId: number, permission?: Permission | Permission[]): void {
   if (!user) throw unauthorized();
   if (permission) requirePermission(user, permission);
   if (!canAccessServer(user, serverId)) throw new AuthError(404, "not_found", "Server not found");
+  /*
+   * A shared (sub-user) grant can be narrower than the account's role: `permissions` on that row is
+   * the scope the administrator picked for *this* server. Owners and root are unaffected.
+   */
+  if (!permission || user.isRoot) return;
+  const owns = queryOne<{ owner_id: number }>("SELECT owner_id FROM servers WHERE id = ?", [serverId]);
+  if (owns && owns.owner_id === user.id) return;
+  const scope = subuserPermissions(user.id, serverId);
+  if (!scope) return;                                   // no explicit scope: the role decides
+  const wanted = Array.isArray(permission) ? permission : [permission];
+  const allowed = user.permissions.includes("*") || wanted.some((needed) => scope.includes(needed));
+  if (!allowed) {
+    throw new AuthError(403, "subuser_scope", `Your access to this server does not include “${wanted.join(" or ")}”. Ask the server owner to widen it.`);
+  }
 }
 
 export async function changePassword(

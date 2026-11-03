@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { connect } from "node:net";
 
 /*
  * The relay is what makes "Restart RSLMC" harmless for running servers, so it is tested without a
@@ -33,6 +34,8 @@ let relayClient: typeof import("../src/processes/relay-client");
 const lines: string[] = [];
 let exits: Array<{ code: number | null; signal: string | null }> = [];
 let connection: Awaited<ReturnType<typeof relayClient.startRelay>> = null;
+/** Captured while the relay is definitely up, for the malformed-frame test further down. */
+let relayState: ReturnType<typeof relayClient.readRelayState> = null;
 
 function waitFor(predicate: () => boolean, timeoutMs = 15_000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -73,6 +76,7 @@ describe("relay", () => {
       onNotice: () => { /* not used here */ },
     });
     expect(connection).not.toBeNull();
+    relayState = relayClient.readRelayState(4242);
     expect(connection!.adopted).toBe(false);
     await waitFor(() => lines.some((line) => line.includes("Done (")));
     expect(lines.some((line) => line.includes("fake java booting"))).toBe(true);
@@ -127,6 +131,28 @@ describe("relay", () => {
     expect(adopted[0]!.code).toBe(0);
     connection = second;
   }, 30_000);
+
+  /*
+   * R4: a malformed `hello` used to crash the relay. `timingSafeEqual` throws `RangeError` when the
+   * buffers differ in length, and that call was not inside a handler try/catch — so a one-character
+   * token killed the process that owns the JVM. A malicious plugin (same OS user, an acknowledged
+   * boundary) can read the relay port from the data directory and send exactly this frame.
+   */
+  test("a malformed hello frame cannot kill the relay", async () => {
+    const state = relayState ?? relayClient.readRelayState(4242);
+    expect(state).not.toBeNull();
+    if (!state) return;
+    const socket = await new Promise<import("node:net").Socket>((resolve, reject) => {
+      const client = connect({ host: "127.0.0.1", port: state.port }, () => resolve(client));
+      client.once("error", reject);
+    });
+    socket.write(`${JSON.stringify({ type: "hello", token: "x" })}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    socket.destroy();
+    // The relay process must still be alive, and the panel's own connection must still work.
+    expect(alive(state.relayPid)).toBe(true);
+    expect(connection).not.toBeNull();
+  }, 20_000);
 
   test("state files are cleaned up and a stale relay is never adopted", async () => {
     relayClient.cleanRelayFiles(4242);
