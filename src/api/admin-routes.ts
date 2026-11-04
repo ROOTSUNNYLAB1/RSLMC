@@ -1,5 +1,5 @@
 import { Router, json, validate, v, badRequest, notFound, pagination, forbidden } from "../shared/http";
-import { requirePermission, publicUser, findUserById, rolesForUser, permissionsForUser } from "../auth";
+import { requirePermission, findUserById, rolesForUser } from "../auth";
 import { hashPassword, checkPasswordPolicy } from "../security/passwords";
 import { query, queryOne, insert, run } from "../database";
 import { listAudit } from "../services/audit";
@@ -8,10 +8,10 @@ import { listNotifications, markRead, markAllRead, dismiss, notify } from "../se
 import { hostStats, diskUsage } from "../resources/host";
 import { describeEnforcement } from "../resources/enforcement";
 import { detectCgroups, installHelper } from "../resources/cgroups";
-import { listServersForUser, listServersForAllocation, setUserServerAccess, mapServer } from "../services/servers";
-import { listManaged, shutdownAll, listManaged as managedList } from "../processes/manager";
+import { listServersForAllocation, setUserServerAccess, mapServer } from "../services/servers";
+import { listManaged } from "../processes/manager";
 import { PERMISSIONS, ALL_PERMISSIONS } from "../shared/permissions";
-import { backupDatabase, getSetting, setSetting } from "../database";
+import { backupDatabase, getSetting } from "../database";
 import { APP_VERSION, MODE, PORT, PATHS, DATA_LOCATION } from "../shared/config";
 import { backupStorageSummary } from "../services/backups";
 import { pruneOldMetrics } from "../database";

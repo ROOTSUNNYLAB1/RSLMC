@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowLeft, ArrowRight, Check, Cpu, Download, Globe2, HardDrive, MemoryStick, Package,
-  Rocket, Server, Settings2, ShieldAlert, Users2,
-} from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Cpu, Download, Globe2, HardDrive, MemoryStick, Package, Rocket, Server, ShieldAlert } from "lucide-react";
 import type { ServerSoftwareId, SoftwareDefinition } from "../../src/shared/types";
 import { heapMbFor, overheadMbFor, initialHeapMbFor, allocationAdvice } from "../../src/shared/memory";
 import { Banner, Button, Card, Field, Input, PageHeader, Pill, Select, Toggle } from "../components/ui";

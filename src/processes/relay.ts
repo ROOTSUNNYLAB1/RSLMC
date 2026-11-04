@@ -24,9 +24,8 @@
 
 import { createServer, type Socket } from "node:net";
 import { timingSafeEqual } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 interface RelayPlan {
   serverId: number;
   uuid: string;

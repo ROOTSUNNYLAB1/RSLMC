@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CalendarClock, Play, Plus, Trash2, History, Power } from "lucide-react";
+import { CalendarClock, Play, Plus, Trash2, History } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, Select, Toggle } from "../components/ui";
 import { api } from "../lib/api";

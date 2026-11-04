@@ -1,4 +1,4 @@
-import { Router, json, validate, v, badRequest, notFound, forbidden, ApiException } from "../shared/http";
+import { Router, json, badRequest, notFound, forbidden, ApiException } from "../shared/http";
 import { requirePermission } from "../auth";
 import type { UserPublic } from "../shared/types";
 import { query, queryOne, run } from "../database";

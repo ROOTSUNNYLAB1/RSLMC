@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -322,6 +322,75 @@ describe("servers on a remote node", () => {
     restore.run("UPDATE servers SET owner_id = ? WHERE id = ?", [previousOwner, serverId]);
     restore.close();
   }, 60_000);
+
+  /*
+   * N1 (audit 2): the sub-user scope added in `d79d5ac` was enforced by `requireServerAccess`, which
+   * only local routes call. A share narrowed to `server.view` therefore restricted the account on a
+   * local server and not on a remote one — the proxy checked the *role*, then ownership, and never
+   * looked at `server_subusers.permissions`.
+   *
+   * This drives the real proxy over a real second panel: a shared account scoped to `server.view`
+   * must read the remote server's files and must *not* be able to open a power action or the
+   * console. `followup.o3` in the pentest covers the same contract locally; this is the remote half.
+   */
+  test("a sub-user's narrow scope is enforced through the node proxy too", async () => {
+    const created = await call(CONTROLLER, controllerCookie, controllerCsrf, "/api/users", {
+      method: "POST",
+      body: { username: "scopeduser", password: "Str0ngPass!23", roles: ["User"] },
+    });
+    expect(created.status).toBe(201);
+    const scopedId = ((await created.json()) as any).id as number;
+
+    // Share the remote server with a scope of exactly two permissions: read the files, nothing else.
+    const grant = await call(CONTROLLER, controllerCookie, controllerCsrf, `/api/users/${scopedId}/servers`, {
+      method: "PUT",
+      body: { owner: [], shared: [serverId], scope: { [serverId]: ["server.view", "server.files"] } },
+    });
+    expect(grant.status).toBe(200);
+
+    const scoped = await loginAs(CONTROLLER, "scopeduser", "Str0ngPass!23");
+    const me = await (await fetch(`${CONTROLLER}/api/auth/me`, { headers: { cookie: scoped.cookie } })).json() as any;
+    // The role does hold these; only the share is narrow. That is what makes the check meaningful.
+    expect(me.user.permissions).toContain("server.command");
+    expect(me.user.isRoot).toBe(false);
+
+    // Inside the scope: forwarded and answered by the node.
+    const read = await call(CONTROLLER, scoped.cookie, scoped.csrf, `/api/servers/${serverId}/files`);
+    expect([401, 403]).not.toContain(read.status);
+
+    // Outside the scope: refused by the controller, never forwarded.
+    const power = await call(CONTROLLER, scoped.cookie, scoped.csrf, `/api/servers/${serverId}/power`, {
+      method: "POST",
+      body: { action: "kill" },
+    });
+    expect(power.status).toBe(403);
+    expect(((await power.json()) as any).error.code).toBe("subuser_scope");
+
+    const consoleWrite = await call(CONTROLLER, scoped.cookie, scoped.csrf, `/api/servers/${serverId}/console`, {
+      method: "POST",
+      body: { command: "op someone" },
+    });
+    expect(consoleWrite.status).toBe(403);
+
+    // Widening the share widens the remote path as well — the rule, not a hardcoded block.
+    const widened = await call(CONTROLLER, controllerCookie, controllerCsrf, `/api/users/${scopedId}/servers`, {
+      method: "PUT",
+      body: { owner: [], shared: [serverId], scope: { [serverId]: ["server.view", "server.command"] } },
+    });
+    expect(widened.status).toBe(200);
+    const allowed = await call(CONTROLLER, scoped.cookie, scoped.csrf, `/api/servers/${serverId}/console`, {
+      method: "POST",
+      body: { command: "say hello" },
+    });
+    // Forwarded: whatever the node says about a stopped server, it is no longer a permission refusal.
+    expect(((await allowed.json().catch(() => ({}))) as any).error?.code ?? "").not.toBe("subuser_scope");
+
+    // Undo the share so the delete test below sees a clean panel.
+    await call(CONTROLLER, controllerCookie, controllerCsrf, `/api/users/${scopedId}/servers`, {
+      method: "PUT",
+      body: { owner: [], shared: [], scope: {} },
+    });
+  }, 90_000);
 
   test("an offline node cannot silently accept a server", async () => {
     // Stop the node, then try to create a server on it.

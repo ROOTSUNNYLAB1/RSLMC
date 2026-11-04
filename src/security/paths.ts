@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { badRequest } from "../shared/http";
 
@@ -78,18 +78,6 @@ export function resolveServerPath(serverDir: string, userPath: string, opts: { m
     return join(realAncestor, relative(baseReal, ancestor) === "." ? "" : "", relative(ancestor, target)).replace(/\/+/g, sep);
   }
   return target;
-}
-
-export function isProbablyBinary(path: string, sampleSize = 8000): boolean {
-  try {
-    const stat = statSync(path);
-    if (!stat.isFile()) return true;
-    if (stat.size > 5 * 1024 * 1024) return true;
-    const file = Bun.file(path);
-    return file.size > 0 && /\.(jar|zip|gz|tar|png|jpg|jpeg|webp|ico|dat|mca|mcr|bin|db|nbt|ogg|mp3|woff2?)$/i.test(path);
-  } catch {
-    return true;
-  }
 }
 
 export function formatBytes(bytes: number): string {

@@ -23,8 +23,6 @@ import {
  * (0–35 inventory, 36 helmet, 37 chest, 38 legs, 39 boots, 40 offhand).
  */
 
-export const INVENTORY_SLOTS = 41;
-
 const ARMOR_TO_GAME: Record<number, number> = { 36: 103, 37: 102, 38: 101, 39: 100, 40: -106 };
 const GAME_TO_ARMOR: Record<number, number> = { 103: 36, 102: 37, 101: 38, 100: 39, [-106]: 40 };
 
@@ -140,15 +138,6 @@ function panelSlotToGame(panelSlot: number): number | null {
 }
 
 /** `minecraft:lapis_lazuli` → `Lapis Lazuli`. */
-export function prettyItemName(id: string): string {
-  const path = id.includes(":") ? id.split(":")[1]! : id;
-  return path
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function toStack(item: Compound, panelSlot: number): ItemStack | null {
   const id = str(item.id);
   if (!id) return null;

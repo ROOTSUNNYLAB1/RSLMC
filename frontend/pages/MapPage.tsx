@@ -3,7 +3,7 @@ import {
   AlertTriangle, Compass, Copy, ExternalLink, Layers, Map as MapIcon, Mountain, RefreshCw, RotateCw, Sprout,
 } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
-import { Banner, Button, Card, CopyValue, EmptyState, Field, Input, Loading, PageHeader, Pill, Select, StatCard, Tabs } from "../components/ui";
+import { Banner, Button, Card, CopyValue, EmptyState, Field, Input, Loading, PageHeader, Pill, Select, StatCard } from "../components/ui";
 import { api } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 import { formatBytes, relativeTime } from "../lib/format";

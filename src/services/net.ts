@@ -1,4 +1,3 @@
-import { createSocket } from "node:dgram";
 
 /** Attempts a real TCP bind to detect conflicts. Returns true when the port is usable. */
 export async function isTcpPortFree(ip: string, port: number): Promise<boolean> {
@@ -27,14 +26,6 @@ export async function isTcpPortFree(ip: string, port: number): Promise<boolean> 
   });
 }
 
-export function isUdpPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = createSocket("udp4");
-    socket.once("error", () => { socket.close(); resolve(false); });
-    socket.bind({ port, exclusive: true }, () => { socket.close(); resolve(true); });
-  });
-}
-
 export function normalizeBindIp(ip: string): string {
   const trimmed = (ip ?? "").trim();
   if (!trimmed) return "0.0.0.0";
@@ -53,6 +44,3 @@ export function isValidPort(port: number): boolean {
 }
 
 /** True when the address is bound to a wildcard interface (reachable from other hosts). */
-export function isWildcardBind(ip: string): boolean {
-  return ip === "0.0.0.0" || ip === "::";
-}

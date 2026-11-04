@@ -1,25 +1,24 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { queryOne, query, run, insert } from "../database";
-import { PATHS, serverDir as serverDirFor } from "../shared/config";
+import { serverDir as serverDirFor } from "../shared/config";
 import { ApiException } from "../shared/http";
 import { bus, serverTopic } from "../events/bus";
 import { notify } from "../services/notifications";
 import { recordActivity } from "../services/audit";
-import { downloadFile, writeFileAtomic } from "../services/download";
+import { writeFileAtomic } from "../services/download";
 import { installServerSoftware, softwareDefinition } from "../minecraft/providers";
 import { ensureRuntime, resolveExecutable, runtimeInfo, runtimeIsUsable } from "../java/manager";
 import { applyLimits, attachProcess, detectCgroups, killCgroup, readUsage, removeCgroup, resolveMemoryUsage } from "../resources/cgroups";
-import { sampleProcess, peekProcess, resetProcessSamples } from "../resources/process-stats";
+import { sampleProcess, peekProcess } from "../resources/process-stats";
 import { directorySizeSync } from "../resources/host";
 import { freemem } from "node:os";
 import { scrubSecrets } from "../security/redact";
 import { normalizeBindIp, isTcpPortFree, isValidPort } from "../services/net";
-import { rediscoverWorlds } from "../minecraft/worlds";
 import type { ConsoleLine, ServerMetrics, ServerStatus } from "../shared/types";
 import type { RuntimeState } from "./types";
 import {
-  findJavaProcessForDirectory, invalidateForeignProcessCache, isProcessAlive, isSameProcess, processStartMark,
+  checkProcessIdentity, findJavaProcessForDirectory, invalidateForeignProcessCache, isProcessAlive, processStartMark,
 } from "./orphans";
 import {
   attachRelay, cleanRelayFiles, isRelayAlive, readRelayState, startRelay, type RelayConnection,
@@ -618,6 +617,13 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
 
     entry.process = proc;
     entry.state.pid = proc.pid ?? null;
+    /*
+     * Record *which* process this pid is. Adoption and relay re-attach used to be the only paths that
+     * did this, so a server started by the panel had no fingerprint at all and every later
+     * "is this still our JVM?" question fell back to liveness — exactly the case a recycled pid slips
+     * through.
+     */
+    entry.state.pidMark = proc.pid ? processStartMark(proc.pid) : null;
 
     if (proc.pid && capabilities.privileged) {
       const attach = attachProcess(serverId, proc.pid);
@@ -846,13 +852,22 @@ async function forceKill(serverId: number, actor: string): Promise<void> {
    * directory-substring match, and a pid can be recycled between then and the kill — SIGKILL on the
    * wrong process is unrecoverable.
    */
-  if (rootPid && !isSameProcess(rootPid, rootMark)) {
+  const identity = rootPid ? checkProcessIdentity(rootPid, rootMark) : "dead";
+  if (rootPid && identity === "mismatch") {
     systemLine(serverId, `Pid ${rootPid} now belongs to a different process — not signalling it.`);
     entry.state.pid = null;
     entry.state.pidMark = null;
     entry.state.foreign = false;
     setStatus(serverId, "offline");
     return;
+  }
+  if (rootPid && identity === "unmarked") {
+    // No fingerprint was ever recorded, so identity cannot be proven. Say so before signalling.
+    systemLine(
+      serverId,
+      `No start-time fingerprint was recorded for pid ${rootPid}, so RSLMC cannot prove it is still this server. `
+      + "Signalling on liveness alone.",
+    );
   }
   if (rootPid) {
     try {
@@ -1171,11 +1186,17 @@ export function reconcileForeignProcesses(): { adopted: number; released: number
     if (entry?.state.status === "installing") continue; // installer owns the directory
 
     if (entry?.state.foreign && entry.state.pid) {
-      if (!isSameProcess(entry.state.pid, entry.state.pidMark)) {
+      const identity = checkProcessIdentity(entry.state.pid, entry.state.pidMark);
+      if (identity === "dead" || identity === "mismatch") {
         entry.state.pid = null;
         entry.state.startedAt = null;
         entry.state.foreign = false;
-        systemLine(row.id, "The adopted Java process has exited.");
+        systemLine(
+          row.id,
+          identity === "dead"
+            ? "The adopted Java process has exited."
+            : "The adopted Java process was replaced by an unrelated process (recycled pid) — releasing it.",
+        );
         setStatus(row.id, "offline");
         released += 1;
       }
@@ -1247,10 +1268,6 @@ export async function installServer(opts: CreateServerOptions): Promise<{ jarFil
 
 /** Set while the panel itself is going down: exits are not crashes in that case. */
 let shuttingDown = false;
-
-export function isShuttingDown(): boolean {
-  return shuttingDown;
-}
 
 /**
  * Stops every managed server. The panel asks each server to `stop` first and only escalates to

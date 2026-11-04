@@ -86,13 +86,6 @@ export function validatePublicPort(raw: unknown): number | null {
   return port;
 }
 
-export function isTunnelHost(host: string, bindIp: string): boolean {
-  const value = host.trim().toLowerCase();
-  if (!value) return false;
-  const { host: bareHost } = splitHostPort(value);
-  return bareHost !== bindIp.toLowerCase();
-}
-
 /** The address players should use. */
 export function playAddress(parts: AddressParts, internalHost: string): string {
   const host = (parts.publicHost ?? "").trim();

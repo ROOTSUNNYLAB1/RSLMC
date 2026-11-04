@@ -294,14 +294,3 @@ export function cleanRelayFiles(serverId: number): void {
 }
 
 /** Reads the last N console lines the relay wrote to disk (used by the console page after adoption). */
-export function readRelayLog(uuid: string, limit = 400): string[] {
-  const path = relayLogPath(uuid);
-  if (!existsSync(path)) return [];
-  try {
-    const text = readFileSync(path, "utf8");
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    return lines.slice(-limit);
-  } catch {
-    return [];
-  }
-}

@@ -28,11 +28,6 @@ function store(theme: string): void {
   } catch { /* storage unavailable — ignore */ }
 }
 
-export function currentTheme(): string {
-  const value = document.documentElement.dataset.theme;
-  return isThemeId(value) ? value : DEFAULT_THEME;
-}
-
 /**
  * Applies a theme. `persist` mirrors it into localStorage (used when the account changes it);
  * a server-driven sync passes persist = true as well, so the next cold load matches.

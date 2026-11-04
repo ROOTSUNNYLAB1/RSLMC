@@ -90,27 +90,6 @@ export interface UserPublic {
   theme: string;
 }
 
-export interface NodeSummary {
-  id: number;
-  uuid: string;
-  name: string;
-  description: string | null;
-  fqdn: string;
-  scheme: "http" | "https";
-  port: number;
-  location: string | null;
-  public: boolean;
-  maintenance: boolean;
-  createdAt: string;
-  lastHeartbeatAt: string | null;
-  daemonVersion: string | null;
-  online: boolean;
-  isLocal: boolean;
-  /** Live figures populated from a heartbeat (never fabricated). */
-  stats?: NodeStats | null;
-  serverCount?: number;
-}
-
 export interface NodeStats {
   os: string;
   arch: string;
@@ -321,27 +300,8 @@ export interface WorldRecord {
   detected: boolean;
 }
 
-export interface MapConfig {
-  serverId: number;
-  provider: "bluemap" | "dynmap" | "none";
-  status: "not_configured" | "installing" | "rendering" | "ready" | "error";
-  progress: number;
-  publicUrl: string | null;
-  worlds: { name: string; dimension: string; renderedChunks?: number }[];
-  lastUpdate: string | null;
-  note: string | null;
-}
-
 export interface ApiError {
   error: { code: string; message: string; details?: unknown };
-}
-
-export interface Paginated<T> {
-  data: T[];
-  page: number;
-  perPage: number;
-  total: number;
-  totalPages: number;
 }
 
 export interface SetupStatus {
@@ -357,18 +317,3 @@ export interface SetupCheck {
   detail: string;
 }
 
-export interface PanelSystemInfo {
-  panel: { version: string; mode: string; port: number; uptimeSeconds: number; bunVersion: string };
-  host: NodeStats;
-  enforcement: ResourceEnforcement;
-  counts: {
-    servers: number;
-    onlineServers: number;
-    users: number;
-    nodes: number;
-    onlineNodes: number;
-    playersOnline: number;
-    backups: number;
-    javaRuntimes: number;
-  };
-}

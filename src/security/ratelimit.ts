@@ -45,6 +45,3 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
   return { allowed: true, remaining: limit - bucket.hits.length, retryAfterSeconds: 0 };
 }
 
-export function resetRateLimit(prefix: string): void {
-  for (const key of buckets.keys()) if (key.startsWith(prefix)) buckets.delete(key);
-}

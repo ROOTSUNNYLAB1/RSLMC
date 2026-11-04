@@ -16,34 +16,6 @@ function buildPath(points: Point[], width: number, height: number, min: number, 
 }
 
 /** Compact inline sparkline used inside stat cards. */
-export function Sparkline({ points, color = "var(--green)", height = 26, width = 92, fill = true }: {
-  points: number[]; color?: string; height?: number; width?: number; fill?: boolean;
-}) {
-  const { path, area } = useMemo(() => {
-    if (points.length < 2) return { path: "", area: "" };
-    const max = Math.max(...points, 1);
-    const min = Math.min(...points, 0);
-    const mapped = points.map((value, index) => ({ ts: index, value }));
-    const line = buildPath(mapped, width, height - 2, min, max);
-    return { path: line, area: `${line} L${width},${height} L0,${height} Z` };
-  }, [points, width, height]);
-
-  if (!path) return <svg width={width} height={height} aria-hidden />;
-  const gradientId = `spark-${color.replace(/[^a-z0-9]/gi, "")}`;
-  return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden style={{ overflow: "visible" }}>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {fill ? <path d={area} fill={`url(#${gradientId})`} /> : null}
-      <path d={path} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 /** Larger time-series chart with grid, axis labels and an optional second series. */
 export function LineChart({
   series, height = 150, unit = "%", max, min = 0, times,
@@ -123,21 +95,3 @@ export function LineChart({
 }
 
 /** Minimal bar chart used for player-count history and audit volume. */
-export function BarChart({ points, color = "var(--blue)", height = 96 }: { points: number[]; color?: string; height?: number }) {
-  if (points.length === 0) return <div className="chart-empty" style={{ height }}>No data</div>;
-  const max = Math.max(...points, 1);
-  return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height }}>
-      {points.map((value, index) => (
-        <div
-          key={index}
-          style={{
-            flex: 1, minWidth: 2, height: `${Math.max(3, (value / max) * 100)}%`,
-            background: color, opacity: 0.35 + (value / max) * 0.6, borderRadius: 2,
-          }}
-          title={`${value}`}
-        />
-      ))}
-    </div>
-  );
-}

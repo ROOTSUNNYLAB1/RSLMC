@@ -1,5 +1,5 @@
-import { Router, jsonError, json, ApiException } from "../shared/http";
-import { SESSION_COOKIE, validateSession, hasPermission, canAccessServer } from "../auth";
+import { Router, jsonError, json } from "../shared/http";
+import { SESSION_COOKIE, validateSession } from "../auth";
 import { rateLimit } from "../security/ratelimit";
 import { checkOrigin } from "../security/origin";
 import { buildContext } from "./context";
@@ -11,8 +11,6 @@ import { registerPanelRoutes } from "./panel-routes";
 import { registerNodeRoutes } from "./node-routes";
 import { isAgentKey, nodeControllerUser, bumpAccepted, recordAgentEvent } from "../nodes/agent";
 import { proxyServerRequest } from "../nodes/proxy";
-import type { RequestContext } from "../shared/http";
-import type { Permission } from "../shared/permissions";
 
 export const api = new Router();
 registerAuthRoutes(api);

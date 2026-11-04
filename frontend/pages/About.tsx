@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowUpRight, BadgeCheck, CheckCircle2, CircleDashed, CircleSlash, Cloud, Cpu, Database, Download,
-  ExternalLink, FolderTree, GitBranch, Code2, HardDrive, Info, Loader2, Package, Power, RefreshCw,
-  Rocket, Server, ShieldCheck, Sparkles, Star, Terminal, TriangleAlert, Users, XCircle, Clock,
-} from "lucide-react";
+import { ArrowUpRight, BadgeCheck, CheckCircle2, CircleDashed, CircleSlash, Cpu, Database, Download, ExternalLink, FolderTree, GitBranch, Code2, Info, Loader2, Package, Power, RefreshCw, Rocket, ShieldCheck, Sparkles, Star, Terminal, TriangleAlert, Users, XCircle, Clock } from "lucide-react";
 import {
   Banner, Button, Card, CopyValue, Field, InfoList, Loading, Modal, PageHeader, Pill, ProgressBar,
   Select, Toggle,
 } from "../components/ui";
 import { api } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
-import { Link } from "../lib/router";
 import { formatBytes, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 
 /*

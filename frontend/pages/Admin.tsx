@@ -1,19 +1,11 @@
 import { useEffect, useState } from "react";
-import {
-  Activity, Cpu, Download, Gauge, Globe2, HardDrive, KeyRound, Plus, RefreshCw, ScrollText,
-  Server, ShieldCheck, Trash2, Users2, MemoryStick, Terminal, CheckCircle2, AlertTriangle, Info,
-  UserPlus, UserCheck, Save, CircleAlert,
-} from "lucide-react";
-import {
-  Avatar, Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader,
-  Pill, ProgressBar, Select, StatCard, Tabs, Toggle, InfoList, CopyValue,
-} from "../components/ui";
+import { Activity, Cpu, Download, Gauge, Globe2, HardDrive, KeyRound, Plus, RefreshCw, ScrollText, Server, ShieldCheck, Trash2, Users2, MemoryStick, Terminal, Info, UserPlus, UserCheck, Save, CircleAlert } from "lucide-react";
+import { Avatar, Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, ProgressBar, Select, StatCard, Toggle, InfoList, CopyValue } from "../components/ui";
 import { api } from "../lib/api";
 import { roleHasAdminAccess } from "../../src/shared/permissions";
 import { useSession, useToast } from "../lib/app";
 import { Link, useRouter } from "../lib/router";
-import { formatBytes, formatDateTime, formatDuration, relativeTime, statusLabel, statusTone } from "../lib/format";
-
+import { formatBytes, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 /* ------------------------------- Sub-navigation -------------------------- */
 export function AdminNav({ active }: { active: string }) {
   const { can } = useSession();

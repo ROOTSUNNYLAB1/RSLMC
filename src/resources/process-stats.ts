@@ -1,6 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
-import { readUsage } from "./cgroups";
-
+import { readFileSync } from "node:fs";
 export interface ProcessSnapshot {
   pid: number;
   rssBytes: number | null;
@@ -189,16 +187,6 @@ export function resetProcessSamples(pid: number): void {
   windowsCache.delete(pid);
 }
 
-export function listChildPids(pid: number): number[] {
-  if (process.platform !== "linux") return [];
-  try {
-    const result = Bun.spawnSync(["sh", "-c", `pgrep -P ${Number(pid)} 2>/dev/null`], { stdout: "pipe", stderr: "ignore" });
-    return result.stdout.toString().trim().split("\n").filter(Boolean).map(Number).filter(Number.isFinite);
-  } catch {
-    return [];
-  }
-}
-
 export function isProcessAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   try {
@@ -216,11 +204,3 @@ export function isProcessAlive(pid: number): boolean {
  * that the kernel would evict in a heartbeat, and counting it made an idle server look like it was
  * using its whole allocation.
  */
-export function cgroupMemory(serverId: number): number | null {
-  if (process.platform !== "linux") return null;
-  return readUsage(serverId).memoryBytes;
-}
-
-export function fileExists(path: string): boolean {
-  return existsSync(path);
-}

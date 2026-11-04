@@ -10,8 +10,6 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const IS_WINDOWS = process.platform === "win32";
-
 /** `mkdir -p`. */
 export function ensureDir(path: string): void {
   if (!existsSync(path)) mkdirSync(path, { recursive: true });

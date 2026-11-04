@@ -1,9 +1,8 @@
 import type { ServerWebSocket } from "bun";
-import { SESSION_COOKIE, validateSession, canAccessServer, hasPermission } from "../auth";
+import { SESSION_COOKIE, validateSession, canAccessServer } from "../auth";
 import { parseCookies } from "../shared/http";
 import { bus, serverTopic, userTopic } from "../events/bus";
 import { consoleHistory, runtimeState, currentMetrics, isRunning, publishPlayers } from "../processes/manager";
-import { queryOne } from "../database";
 import { rewriteForNode, nodeBaseUrl, remoteLinkRemoteId } from "../nodes/client";
 import { isAgentKey, nodeControllerUser } from "../nodes/agent";
 import { checkOrigin } from "../security/origin";

@@ -1,10 +1,10 @@
-import { existsSync, readdirSync, statSync, mkdirSync, rmSync, renameSync, copyFileSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, mkdirSync, rmSync, renameSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { serverDir, PATHS } from "../shared/config";
 import { resolveServerPath, sanitizeRelative, isInside } from "../security/paths";
 import { createTarGz, extractTarGz, extractZip } from "../shared/archive";
-import { copyPath, directorySize } from "../shared/platform";
+import { copyPath } from "../shared/platform";
 import { ApiException } from "../shared/http";
 import { queryOne } from "../database";
 import { parseProperties, escapePropertyValue } from "../minecraft/properties";
@@ -304,11 +304,3 @@ export function fileStream(serverId: number, path: string): { stream: ReadableSt
   return { stream: file.stream(), size: stat.size, name: basename(target) };
 }
 
-export function diskUsageForServer(serverId: number): { bytes: number } {
-  // Pure-JS walk instead of `du -sb`: the panel has to work on Windows too.
-  try {
-    return { bytes: directorySize(serverRoot(serverId)) };
-  } catch {
-    return { bytes: 0 };
-  }
-}

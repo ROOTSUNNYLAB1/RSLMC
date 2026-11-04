@@ -91,17 +91,6 @@ export function statusLabel(status: string): string {
 }
 
 /** Initials-based fallback avatar colour; deterministic per name. */
-export function colorFor(name: string): string {
-  const palette = ["#2f6b4a", "#35507d", "#6b5a2f", "#5c3b6b", "#2f6165", "#6b3a3a"];
-  let hash = 0;
-  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) % 9973;
-  return palette[hash % palette.length]!;
-}
-
-export function pluralize(count: number, singular: string, plural?: string): string {
-  return count === 1 ? singular : plural ?? `${singular}s`;
-}
-
 export function cpuAllocationLabel(percent: number): string {
   const cores = percent / 100;
   return `${percent}% · ${cores.toFixed(cores % 1 === 0 ? 0 : 1)} core-equivalent${cores === 1 ? "" : "s"}`;

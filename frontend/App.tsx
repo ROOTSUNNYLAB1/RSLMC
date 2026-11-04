@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import type { ReactNode } from "react";
-import { Ban, ChevronRight, Compass, Home, Lock, ServerCog, ShieldAlert } from "lucide-react";
+import { Ban, Compass, Home, Lock, ServerCog, ShieldAlert } from "lucide-react";
 import type { ServerSummary, UserPublic } from "../src/shared/types";
 import { Shell } from "./components/layout";
 import { Banner, Button, Card, EmptyState, Loading } from "./components/ui";

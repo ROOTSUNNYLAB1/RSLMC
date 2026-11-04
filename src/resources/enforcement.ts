@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import type { EnforcementLevel, ResourceEnforcement } from "../shared/types";
+import { readFileSync } from "node:fs";
+import type { ResourceEnforcement } from "../shared/types";
 import { detectCgroups } from "./cgroups";
 import { hostPlatform } from "../shared/config";
 
@@ -87,10 +87,3 @@ export function describeEnforcement(capabilities = detectCgroups()): ResourceEnf
   return { memory, cpu, disk };
 }
 
-export function enforcementBadge(level: EnforcementLevel): string {
-  return level === "enforced" ? "Enforced" : level === "partial" ? "Partially enforced" : level === "advisory" ? "Advisory only" : "Unsupported";
-}
-
-export function systemdAvailable(): boolean {
-  return existsSync("/run/systemd/system");
-}

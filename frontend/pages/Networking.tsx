@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Globe2, Link2, Network, Plus, RefreshCw, Save, ShieldAlert, Wifi } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
-import { Banner, Button, Card, CopyValue, Field, Input, Loading, PageHeader, Pill, StatCard, Toggle } from "../components/ui";
+import { Banner, Button, Card, CopyValue, Field, Input, Loading, PageHeader, Pill, StatCard } from "../components/ui";
 import { api } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 

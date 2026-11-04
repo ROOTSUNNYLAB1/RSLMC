@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Earth, Plus, Trash2, Download, ShieldAlert, RefreshCw, Boxes, Database } from "lucide-react";
+import { Earth, Plus, Trash2, Download, RefreshCw, Boxes, Database } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, StatCard } from "../components/ui";
 import { api } from "../lib/api";

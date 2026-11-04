@@ -270,8 +270,3 @@ export function writeProperties(directory: string, patch: PropertyPatch, reserve
   return { changed, restartRequired };
 }
 
-export function defaultPropertyValues(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const spec of PROPERTY_SPECS) if (spec.default !== undefined) out[spec.key] = spec.default;
-  return out;
-}

@@ -235,6 +235,29 @@ fails without the fix.
 
 ---
 
+## 1h. Second follow-up review, 3 November 2026 (N1–N3)
+
+Audit 2 re-read `d79d5ac` and confirmed every R and O item, then found one authorisation asymmetry in
+the *new* code — which turned out to be two bugs, not one.
+
+| ID | Type | What was wrong | What it is now | Test |
+|---|---|---|---|---|
+| **N1a** | Medium | The sub-user scope is enforced by `requireServerAccess`, which only local routes call. The node proxy checked the account's **role**, then ownership, and never read `server_subusers.permissions` — so a share scoped to `server.view` was read-only on a local server and unrestricted on a remote one | the scope rule lives in one place, `assertWithinSubuserScope` / `subuserScopeRefusal`, and the proxy calls it with the same expression the local route would use (`ACCESS` counts as `server.view`) | `tests/nodes.test.ts` — real second panel, scoped account: file read forwarded, `power`/console refused `403 subuser_scope`, widening the share allowed again; pentest `followup.n1` |
+| **N1b** | Medium | `PUT /api/users/:id/servers` only wrote a scope when the share was *created* (`if (currentShared.has(id)) continue`), so narrowing an existing grant answered `200` and changed nothing. The control looked like it worked | the scope is written on every call (`INSERT … ON CONFLICT DO UPDATE`) | pentest `followup.n1` |
+| **N1c** | Low | `/api/servers/:id/files` was listed as `ACCESS` in the proxy table while its handler asks for `server.files`. Nothing caught it because the drift test only parsed `server-routes.ts`, and the row was unreachable anyway: `/files/*` matched `/files` and sorted first | the row says `server.files`; a trailing `*` no longer shadows an exact-depth rule; the drift test now reads `file-routes.ts` and `ws.ts` as well | `tests/server-permissions.test.ts` (79 checks, incl. three rule-selection tests) |
+| **N2** | Low | `isSameProcess` returned `true` when a fingerprint was recorded but unreadable — and the panel's own spawn path never recorded one at all, so every locally started server fell back to liveness-only | fingerprints are recorded at spawn; identity is a four-state answer (`dead` / `verified` / `mismatch` / `unmarked`) and `isSameProcess` is `verified` only. A kill on an unmarked pid logs that it is going on liveness alone; an adopted pid whose fingerprint stops matching is released instead of being reported as "exited" | `tests/process-identity.test.ts` (10 checks) |
+| **N3** | Trivial | Unused imports after the permission rewrite, plus 53 never-referenced exports (~330 lines) left queued by `d79d5ac` | the 53 exports and 83 unused imports are gone; `typecheck`, the full suite and the build are green. Nothing was left "queued" | `bun run typecheck`, `bun run test`, `bun run build` |
+
+**Not changed, on purpose**
+
+* An **unmarked** pid is still signalable. Refusing outright would strand servers started before this
+  release — the panel could no longer stop them. The behaviour is now explicit, logged, and gone for
+  every process spawned from here on.
+* The proxy's block list stays deny-by-default. A route added to `api/` without a table entry fails
+  `tests/server-permissions.test.ts` rather than silently becoming unreachable remotely.
+
+---
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |
@@ -300,8 +323,8 @@ fails without the fix.
 ```bash
 cd rslmc
 bun install
-bun test                              # 339 unit/integration tests (36 files)
-bun run tests/security/pentest.ts     # 145 adversarial checks against a throwaway instance
+bun test                              # 349 unit/integration tests (36 files)
+bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```
 

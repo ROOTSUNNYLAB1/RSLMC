@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowUpFromLine, ChevronRight, Copy, Download, File, FileCode2, FileText, Folder, FolderPlus,
-  HardDriveDownload, Pencil, Save, Search, Trash2, Upload, X, FolderInput, FilePlus2, Link2,
-} from "lucide-react";
+import { ArrowUpFromLine, ChevronRight, Copy, Download, File, FileCode2, FileText, Folder, FolderPlus, HardDriveDownload, Pencil, Save, Search, Trash2, Upload, FolderInput, FilePlus2, Link2 } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill } from "../components/ui";
 import { api, errorMessage } from "../lib/api";

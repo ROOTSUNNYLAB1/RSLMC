@@ -3,7 +3,6 @@ import { query, queryOne, insert, run, getSetting, setSetting, getDb } from "../
 import { DEFAULT_ROLES } from "../shared/permissions";
 import { hashPassword } from "../security/passwords";
 import { hostPlatform, PORT, MODE, APP_VERSION, PATHS } from "../shared/config";
-import { notify } from "./notifications";
 import { recordAudit } from "./audit";
 import { randomBytes } from "node:crypto";
 
@@ -125,8 +124,3 @@ export async function bootstrap(): Promise<void> {
   connection.exec("PRAGMA optimize;");
 }
 
-export function localNodeId(): number {
-  const row = queryOne<{ id: number }>("SELECT id FROM nodes WHERE is_local = 1");
-  if (!row) throw new Error("Local node is missing — database bootstrap failed");
-  return row.id;
-}

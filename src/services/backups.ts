@@ -11,7 +11,7 @@ import { createTarGz, extractTarGz, isReadableArchive } from "../shared/archive"
 import { recordActivity } from "./audit";
 import { notify } from "./notifications";
 import { bus, serverTopic } from "../events/bus";
-import { getSetting, setSetting } from "../database";
+import { getSetting } from "../database";
 import type { BackupRecord } from "../shared/types";
 
 const running = new Set<number>();

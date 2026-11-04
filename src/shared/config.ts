@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
-import { migrateLegacyData, resolveDataLocation, type DataLocation } from "./data-location";
-
+import { migrateLegacyData, resolveDataLocation } from "./data-location";
 export type PanelMode = "development" | "production";
 
 const ROOT = resolve(dirname(import.meta.dir), "..");
@@ -70,7 +69,6 @@ export const DATA_LOCATION = resolveDataLocation({
   adoptLegacy: env("RSLMC_ADOPT_LEGACY", "false") === "true",
 });
 export const DATA_DIR = DATA_LOCATION.dir;
-export const PUBLIC_DIR = join(ROOT, "public");
 export const FRONTEND_DIR = join(ROOT, "frontend");
 
 export const PATHS = {

@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Activity, Cpu, HardDrive, MemoryStick, Plus, Server, ServerCog, Users2, ArrowRight, Globe2,
-  ShieldCheck, CheckCircle2, AlertTriangle, Clock,
-} from "lucide-react";
+import { Activity, Cpu, HardDrive, MemoryStick, Plus, Server, ServerCog, Users2, ArrowRight, ShieldCheck, CheckCircle2, AlertTriangle, Clock } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Button, Card, CopyValue, EmptyState, Loading, PageHeader, Pill, StatCard, Banner, InfoList } from "../components/ui";
 import { Link, useRouter } from "../lib/router";

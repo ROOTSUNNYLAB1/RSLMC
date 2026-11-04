@@ -2,6 +2,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { queryOne, query, run, insert } from "../database";
 import { unauthorized, forbidden, ApiException } from "../shared/http";
 import type { Permission } from "../shared/permissions";
+import { ACCESS, type PermissionExpr } from "../shared/server-permissions";
 import type { UserPublic } from "../shared/types";
 import { hashPassword, verifyPassword } from "../security/passwords";
 import { MODE } from "../shared/config";
@@ -319,19 +320,59 @@ export function requireServerAccess(user: UserPublic | undefined, serverId: numb
   if (!user) throw unauthorized();
   if (permission) requirePermission(user, permission);
   if (!canAccessServer(user, serverId)) throw new AuthError(404, "not_found", "Server not found");
-  /*
-   * A shared (sub-user) grant can be narrower than the account's role: `permissions` on that row is
-   * the scope the administrator picked for *this* server. Owners and root are unaffected.
-   */
+  assertWithinSubuserScope(user, serverId, permission);
+}
+
+/**
+ * The sub-user scope check on its own, without the ownership lookup.
+ *
+ * A shared (`server_subusers`) grant can be narrower than the account's role: its `permissions`
+ * column is the scope the administrator picked for *this* server. Owners and root are unaffected, and
+ * a row with no scope keeps the role's permissions (legacy rows — see `subuserPermissions`).
+ *
+ * This lives outside `requireServerAccess` because the node proxy forwards requests on behalf of the
+ * user and must apply exactly the same rule. It did not, so a "read-only" share on a *remote* server
+ * was not read-only while the same share on a local server was: the scope was enforced on one path
+ * and ignored on the other.
+ */
+export function assertWithinSubuserScope(
+  user: UserPublic,
+  serverId: number,
+  permission?: PermissionExpr,
+): void {
   if (!permission || user.isRoot) return;
   const owns = queryOne<{ owner_id: number }>("SELECT owner_id FROM servers WHERE id = ?", [serverId]);
   if (owns && owns.owner_id === user.id) return;
   const scope = subuserPermissions(user.id, serverId);
   if (!scope) return;                                   // no explicit scope: the role decides
-  const wanted = Array.isArray(permission) ? permission : [permission];
+  // `ACCESS` is the proxy's "anyone who can reach the server" rule — that is exactly `server.view`.
+  const wanted: string[] = permission === ACCESS
+    ? ["server.view"]
+    : Array.isArray(permission) ? [...permission] : [permission];
   const allowed = user.permissions.includes("*") || wanted.some((needed) => scope.includes(needed));
   if (!allowed) {
-    throw new AuthError(403, "subuser_scope", `Your access to this server does not include “${wanted.join(" or ")}”. Ask the server owner to widen it.`);
+    throw new AuthError(
+      403,
+      "subuser_scope",
+      `Your access to this server does not include “${wanted.join(" or ")}”. Ask the server owner to widen it.`,
+    );
+  }
+}
+
+/**
+ * Same rule for the callers that build a `Response` instead of throwing (the node proxy).
+ * Returns the reason when the request is outside the scope, or `null` when it may proceed.
+ */
+export function subuserScopeRefusal(
+  user: UserPublic,
+  serverId: number,
+  permission?: PermissionExpr,
+): string | null {
+  try {
+    assertWithinSubuserScope(user, serverId, permission);
+    return null;
+  } catch (error) {
+    return error instanceof AuthError ? error.message : null;
   }
 }
 

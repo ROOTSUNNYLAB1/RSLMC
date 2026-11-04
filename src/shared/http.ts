@@ -17,7 +17,6 @@ export const unauthorized = (message = "Authentication required") => new ApiExce
 export const forbidden = (message = "You do not have permission to perform this action") => new ApiException(403, "forbidden", message);
 export const notFound = (message = "Not found") => new ApiException(404, "not_found", message);
 export const conflict = (message: string, details?: unknown) => new ApiException(409, "conflict", message, details);
-export const tooMany = (message = "Too many requests") => new ApiException(429, "rate_limited", message);
 export const unavailable = (message: string) => new ApiException(503, "unavailable", message);
 
 export function json(data: unknown, init: ResponseInit = {}): Response {

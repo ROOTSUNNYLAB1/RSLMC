@@ -23,16 +23,8 @@ let csrfToken: string | null = null;
  */
 let panelVersion: string | null = null;
 
-export function getPanelVersion(): string | null {
-  return panelVersion;
-}
-
 export function setCsrfToken(token: string | null): void {
   csrfToken = token;
-}
-
-export function getCsrfToken(): string | null {
-  return csrfToken;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, init: RequestInit = {}): Promise<T> {

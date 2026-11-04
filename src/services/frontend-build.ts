@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, statSync, cpSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT_DIR, FRONTEND_DIR, MODE } from "../shared/config";
 
@@ -61,10 +61,6 @@ export async function ensureFrontendBuilt(): Promise<boolean> {
   return result.ok;
 }
 
-export function frontendBuildError(): string | null {
-  return existsSync(join(OUT_DIR, "index.html")) ? null : "The frontend bundle is missing from public/dist.";
-}
-
 export function staticFile(pathname: string): { file: Bun.BunFile; contentType: string } | null {
   const safe = pathname.replace(/\.\./g, "").replace(/\/+/g, "/");
   const candidates = [
@@ -103,10 +99,3 @@ function contentTypeFor(path: string): string {
   return map[extension] ?? "application/octet-stream";
 }
 
-export function distExists(): boolean {
-  return existsSync(join(OUT_DIR, "index.html"));
-}
-
-export function buildTimestamp(): number {
-  return lastBuild;
-}

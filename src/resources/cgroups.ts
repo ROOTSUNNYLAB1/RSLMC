@@ -309,6 +309,3 @@ export function resolveMemoryUsage(
     : { bytes: rss, source: "/proc", cgroupTrusted: false };
 }
 
-export function resetCapabilityCache(): void {
-  cached = null;
-}

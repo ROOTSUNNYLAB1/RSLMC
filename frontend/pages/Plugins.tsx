@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowDownToLine, Download, ExternalLink, Package, Plug, RefreshCw, Search, Trash2, Upload, ShieldAlert,
 } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
-import { Banner, Button, Card, ConfirmDialog, EmptyState, Input, Loading, Modal, PageHeader, Pill, Select, StatCard, Tabs } from "../components/ui";
-import { api, errorMessage } from "../lib/api";
+import { Banner, Button, Card, ConfirmDialog, EmptyState, Loading, Modal, PageHeader, Pill, Select, StatCard, Tabs } from "../components/ui";
+import { api } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 import { formatBytes, relativeTime } from "../lib/format";
 import { summariseGameVersions, summariseLoaders } from "../lib/mc-version";

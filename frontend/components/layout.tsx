@@ -1,13 +1,9 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import {
-  Activity, Archive, Bell, Boxes, ChevronRight, CircleUser, Cog, Database, FileCode2,
-  Files, Gauge, Globe2, Home, LayoutDashboard, ListChecks, Map as MapIcon, Maximize2, Menu,
-  Minimize2, Network, Plug, ShieldCheck, Terminal, Users2, Earth, Power, Cpu, ScrollText, ServerCog,
-} from "lucide-react";
+import { Activity, Archive, Bell, Boxes, ChevronRight, CircleUser, Cog, Database, FileCode2, Files, Home, LayoutDashboard, ListChecks, Map as MapIcon, Maximize2, Menu, Minimize2, Network, Plug, ShieldCheck, Terminal, Users2, Earth, Power, ServerCog } from "lucide-react";
 import { Link, useRouter } from "../lib/router";
 import { useSession } from "../lib/app";
-import { panelSocket, usePanelSocket } from "../lib/ws";
+import { panelSocket } from "../lib/ws";
 import type { ServerSummary } from "../../src/shared/types";
 import { Avatar, Pill } from "./ui";
 import { statusLabel, statusTone } from "../lib/format";
@@ -234,13 +230,6 @@ function PanelFooter({ crumbs }: { crumbs: { label: string; to?: string }[] }) {
       </div>
     </footer>
   );
-}
-
-export function useLiveNotifications() {
-  const { setUnread } = useSession();
-  usePanelSocket(null, (message) => {
-    if (message.type === "notification") setUnread((current: number) => current + 1);
-  });
 }
 
 /**

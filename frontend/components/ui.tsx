@@ -285,16 +285,6 @@ export function Loading({ label = "Loading…", minHeight = 160 }: { label?: str
   );
 }
 
-export function SkeletonRows({ rows = 4 }: { rows?: number }) {
-  return (
-    <div className="stack" style={{ padding: 12, gap: 8 }}>
-      {Array.from({ length: rows }).map((_, index) => (
-        <div key={index} className="skeleton" style={{ height: 14, width: `${100 - index * 9}%` }} />
-      ))}
-    </div>
-  );
-}
-
 /* -------------------------------- Banner ------------------------------- */
 export function Banner({ tone = "warning", title, children, action, icon }: {
   tone?: "warning" | "error" | "info" | "success"; title?: ReactNode; children?: ReactNode; action?: ReactNode; icon?: ReactNode;

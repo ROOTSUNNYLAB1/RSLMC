@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Archive, CheckCircle2, Clock, Download, RefreshCw, RotateCcw, ShieldCheck, Trash2, XCircle } from "lucide-react";
+import { Archive, Clock, Download, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, ProgressBar, Select, StatCard } from "../components/ui";
 import { api } from "../lib/api";

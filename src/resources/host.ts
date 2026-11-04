@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { cpus, totalmem, freemem, loadavg, uptime, release, platform, arch } from "node:os";
 import { statfsSync } from "node:fs";
 import { PATHS } from "../shared/config";
@@ -102,14 +102,3 @@ export function directorySizeSync(path: string): number {
   return directorySize(path);
 }
 
-export function tcpConnections(port: number): number {
-  if (process.platform !== "linux") return 0;
-  try {
-    const result = Bun.spawnSync(["sh", "-c", `ss -Htn state established '( sport = :${Number(port)} )' 2>/dev/null | wc -l`], {
-      stdout: "pipe", stderr: "ignore",
-    });
-    return Number(result.stdout.toString().trim()) || 0;
-  } catch {
-    return 0;
-  }
-}

@@ -2,12 +2,11 @@ import { chmodSync, existsSync, readFileSync, readdirSync, rmSync, statSync } fr
 import { ensureDir, movePath, directorySize } from "../shared/platform";
 import { extractTarGzStreaming, extractZipStreaming } from "../shared/archive";
 import { join } from "node:path";
-import { PATHS, hostPlatform, MODE } from "../shared/config";
+import { PATHS, hostPlatform } from "../shared/config";
 import { query, queryOne, insert, run } from "../database";
 import { downloadFile, fetchJson, assertTrustedUrl } from "../services/download";
 import { ApiException } from "../shared/http";
 import type { JavaRuntimeInfo } from "../shared/types";
-import { notify } from "../services/notifications";
 
 /** Java majors RSLMC can provision. Adoptium publishes releases for all of these. */
 export const SUPPORTED_JAVA_MAJORS = [8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25] as const;
@@ -331,11 +330,6 @@ export function runtimeIsUsable(runtime: JavaRuntimeInfo | null | undefined): bo
   if (!resolveExecutable(runtime)) return false;
   if (!existsSync(runtime.path)) return false;
   return runtimeRuns(runtime.path);
-}
-
-export function invalidateRuntimeHealth(path?: string): void {
-  if (path) runtimeHealth.delete(path);
-  else runtimeHealth.clear();
 }
 
 export async function ensureRuntime(major: number, nodeId?: number): Promise<JavaRuntimeInfo> {

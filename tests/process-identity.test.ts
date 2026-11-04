@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isProcessAlive, isSameProcess, processStartMark } from "../src/processes/orphans";
+import { checkProcessIdentity, isProcessAlive, isSameProcess, processStartMark } from "../src/processes/orphans";
 
 /*
  * O1 — "is this still the process I recorded?".
@@ -49,8 +49,25 @@ describe("process identity", () => {
     expect(isSameProcess(0, null)).toBe(false);
   });
 
-  test("no fingerprint recorded → liveness is the only signal (backwards compatible)", () => {
-    expect(isSameProcess(process.pid, null)).toBe(true);
-    expect(isSameProcess(process.pid, undefined)).toBe(true);
+  test("no fingerprint recorded → identity is NOT proven, so the answer is no", () => {
+    // Fail closed. `d79d5ac` answered `true` here, which is the pre-fix behaviour wearing a guard.
+    expect(isSameProcess(process.pid, null)).toBe(false);
+    expect(isSameProcess(process.pid, undefined)).toBe(false);
+    expect(checkProcessIdentity(process.pid, null)).toBe("unmarked");
+  });
+
+  test("a recorded fingerprint we cannot read now is a mismatch, not a pass", () => {
+    // Simulated by asking about a pid that answers for a *different* fingerprint; the important half
+    // is that an unreadable probe (`processStartMark` → null) never yields "verified".
+    expect(checkProcessIdentity(process.pid, "linux:1")).toBe("mismatch");
+    expect(checkProcessIdentity(process.pid, processStartMark(process.pid))).toBe("verified");
+  });
+
+  test("the four states are distinct", () => {
+    const alive = process.pid;
+    expect(checkProcessIdentity(alive, processStartMark(alive)!)).toBe("verified");
+    expect(checkProcessIdentity(alive, "win:1999-01-01T00:00:00Z")).toBe("mismatch");
+    expect(checkProcessIdentity(alive, null)).toBe("unmarked");
+    expect(checkProcessIdentity(0, null)).toBe("dead");
   });
 });

@@ -19,11 +19,19 @@ import { DEFAULT_ROLES } from "../src/shared/permissions";
  * compares it with the table. Adding or changing a route without updating the table fails here.
  */
 
-const ROUTE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "api", "server-routes.ts"), "utf8");
+/*
+ * Every file that registers a per-server route has to be read, not just `server-routes.ts`. The
+ * `/files` row disagreed with its handler in `file-routes.ts` and this suite never looked there.
+ */
+const ROUTE_FILES = ["server-routes.ts", "file-routes.ts", "ws.ts"] as const;
+const ROUTE_SOURCES = ROUTE_FILES.map((file) => ({
+  file,
+  source: readFileSync(join(import.meta.dir, "..", "src", "api", file), "utf8"),
+}));
 
 interface DeclaredRoute { method: string; path: string; permission: string }
 
-function declaredRoutes(): DeclaredRoute[] {
+function declaredRoutesFrom(ROUTE_SOURCE: string): DeclaredRoute[] {
   // Split on route registrations, keeping the handler body as the chunk that follows each one.
   const parts = ROUTE_SOURCE.split(/\n\s{2}api\.(get|post|put|patch|delete)\("(\/api\/servers[^"]*)"/);
   const routes: DeclaredRoute[] = [];
@@ -43,6 +51,8 @@ function declaredRoutes(): DeclaredRoute[] {
   }
   return routes;
 }
+
+const declaredRoutes = (): DeclaredRoute[] => ROUTE_SOURCES.flatMap(({ source }) => declaredRoutesFrom(source));
 
 const normalise = (permission: string | readonly string[]): string =>
   permission === ACCESS ? ACCESS
@@ -76,6 +86,27 @@ describe("the proxy's permission table matches the local routes", () => {
       expect(normalise(lookup.permission!)).toBe(route.permission);
     });
   }
+});
+
+describe("rule selection", () => {
+  test("a trailing wildcard does not shadow the bare path", () => {
+    // `/api/servers/:id/files/*` has five segments and used to win over `/api/servers/:id/files`.
+    const lookup = serverPermissionFor("GET", "/api/servers/1/files");
+    expect(lookup.rule?.path).toBe("/api/servers/:id/files");
+  });
+
+  test("a deeper path still resolves to the wildcard rule", () => {
+    const lookup = serverPermissionFor("GET", "/api/servers/1/files/world/level.dat");
+    expect(lookup.rule?.path).toBe("/api/servers/:id/files/*");
+    expect(normalise(lookup.permission!)).toBe("server.files");
+  });
+
+  test("the most specific rule wins across different depths", () => {
+    expect(serverPermissionFor("GET", "/api/servers/1/players/uuid-one/data").rule?.path)
+      .toBe("/api/servers/:id/players/:uuid/data");
+    expect(serverPermissionFor("GET", "/api/servers/1/players").rule?.path)
+      .toBe("/api/servers/:id/players");
+  });
 });
 
 describe("deny by default", () => {

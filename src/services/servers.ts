@@ -23,10 +23,6 @@ import { ensureRuntime, resolveExecutable, runtimeInfo } from "../java/manager";
 import { notify } from "./notifications";
 import type { ServerSummary, ServerStatus, UserPublic } from "../shared/types";
 
-export interface ServerRowDb {
-  [key: string]: any;
-}
-
 export function mapServer(row: any): ServerSummary {
   const node = queryOne<{ name: string }>("SELECT name FROM nodes WHERE id = ?", [row.node_id]);
   const owner = queryOne<{ username: string }>("SELECT username FROM users WHERE id = ?", [row.owner_id]);
@@ -278,19 +274,26 @@ export function setUserServerAccess(userId: number, input: AllocationInput): {
       query<{ server_id: number }>("SELECT server_id FROM server_subusers WHERE user_id = ?", [userId]).map((row) => Number(row.server_id)),
     );
     for (const id of wantedShared) {
-      if (currentShared.has(id)) continue;
       /*
-       * The scope is written explicitly. `permissions` used to be left NULL and never read, so a
-       * shared grant silently meant "the account's whole role on this server". `scopeFor` narrows a
-       * share to the server-level permissions the role actually has — the administrator can tighten
-       * it further through `PUT /api/users/:id/servers` by passing `scope`.
+       * The scope is written explicitly, and re-written on a share that already exists.
+       *
+       * `permissions` used to be left NULL and never read, so a shared grant silently meant "the
+       * account's whole role on this server". `scopeFor` narrows a share to the server-level
+       * permissions the role actually has — the administrator can tighten it further through
+       * `PUT /api/users/:id/servers` by passing `scope`.
+       *
+       * This used to `continue` when the share was already there, so changing somebody's scope on a
+       * server they already had access to wrote nothing: the panel reported `shared: [1]` and the
+       * scope stayed at its old value. Widening or narrowing is the whole point of the control.
        */
+      const alreadyShared = currentShared.has(id);
+      const permissions = JSON.stringify(scopeFor(userId, id, input.scope?.[id]));
       run(
         "INSERT INTO server_subusers (server_id, user_id, permissions) VALUES (?, ?, ?) "
         + "ON CONFLICT(server_id, user_id) DO UPDATE SET permissions = excluded.permissions",
-        [id, userId, JSON.stringify(scopeFor(userId, id, input.scope?.[id]))],
+        [id, userId, permissions],
       );
-      sharedAdded.push(id);
+      if (!alreadyShared) sharedAdded.push(id);
     }
     for (const id of currentShared) {
       if (wantedShared.has(id)) continue;

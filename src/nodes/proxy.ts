@@ -1,9 +1,8 @@
-import { json, ApiException } from "../shared/http";
+import { json } from "../shared/http";
 import { run } from "../database";
-import { SESSION_COOKIE, validateSession, canAccessServer, hasPermission } from "../auth";
+import { SESSION_COOKIE, validateSession, canAccessServer, subuserScopeRefusal } from "../auth";
 import { parseCookies } from "../shared/http";
-import { nodeRequest, rewriteForNode, getNode, markNodeDown, type NodeRow } from "./client";
-import type { Permission } from "../shared/permissions";
+import { nodeRequest, rewriteForNode, markNodeDown, type NodeRow } from "./client";
 import { recordActivity } from "../services/audit";
 import { checkOrigin } from "../security/origin";
 import { serverPermissionFor, permissionSatisfied, describePermission } from "../shared/server-permissions";
@@ -31,10 +30,6 @@ import { rateLimit } from "../security/ratelimit";
 function proxyTargetPath(serverId: number, subPath: string): string {
   return `/api/servers/${serverId}${subPath.split("?")[0] ?? ""}`;
 }
-
-export interface ProxyOutcome {
-  handled: false;
-} 
 
 /**
  * Returns a Response when the path belonged to a remote server (and was forwarded), or null to let
@@ -136,6 +131,16 @@ export async function proxyServerRequest(req: Request, url: URL, clientIp: strin
   if (!canAccessServer(user, serverId)) {
     return json({ error: { code: "not_found", message: "Server not found" } }, { status: 404 });
   }
+  /*
+   * A shared grant can be narrower than the account's role. The local routes enforce that through
+   * `requireServerAccess`; this path has to as well, or a share scoped to `server.view` would still
+   * be able to kill the process, write files and open the console on a server that happens to live on
+   * another node.
+   */
+  const scopeRefusal = subuserScopeRefusal(user, serverId, lookup.permission);
+  if (scopeRefusal) {
+    return json({ error: { code: "subuser_scope", message: scopeRefusal } }, { status: 403 });
+  }
 
   // --- CSRF, same rule as local routes -------------------------------------------
   if (!safe) {
@@ -201,17 +206,6 @@ export async function proxyServerRequest(req: Request, url: URL, clientIp: strin
    * would then 404. So the ids are translated back before the answer leaves the panel.
    */
   return json(remapIds(response.body, serverId, target.remoteId, node), { status: response.status, headers: passthrough });
-}
-
-export function remoteNodeFor(serverId: number): NodeRow | null {
-  const target = rewriteForNode(serverId, `/api/servers/${serverId}`);
-  return target ? getNode(target.node.id) : null;
-}
-
-export function assertNodeUsable(node: NodeRow, action: string): void {
-  if (node.maintenance === 1) {
-    throw new ApiException(409, "node_maintenance", `Node "${node.name}" is in maintenance mode — ${action} is paused there.`);
-  }
 }
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Terminal } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
-import { Card, PageHeader, Pill, Button } from "../components/ui";
+import { Card, PageHeader, Pill } from "../components/ui";
 import { ConsolePanel, mergeLines, type ConsoleLine } from "../components/console";
 import { useSession } from "../lib/app";
 import { api } from "../lib/api";

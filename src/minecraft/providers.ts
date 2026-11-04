@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { ensureDir, movePath } from "../shared/platform";
 import { join } from "node:path";
 import { fetchJson, downloadFile, writeFileAtomic } from "../services/download";
@@ -568,14 +568,3 @@ export function detectLauncher(directory: string, software: ServerSoftwareId): s
   return jar ?? null;
 }
 
-export function softwareSupportsMarketplace(id: ServerSoftwareId, kind: "plugin" | "mod"): boolean {
-  const definition = softwareDefinition(id);
-  return kind === "plugin" ? definition.supportsPlugins : definition.supportsMods;
-}
-
-export function directoryHasAnyJar(directory: string): boolean {
-  if (!existsSync(directory)) return false;
-  return readdirSync(directory).some((entry) => {
-    try { return entry.endsWith(".jar") && statSync(join(directory, entry)).isFile(); } catch { return false; }
-  });
-}

@@ -176,8 +176,3 @@ export function createEmptyWorld(serverId: number, folder: string, seed: string 
   return mapWorld(queryOne("SELECT * FROM worlds WHERE server_id = ? AND folder = ?", [serverId, folder]));
 }
 
-export function worldPath(serverId: number, folder: string): string {
-  const server = queryOne<{ uuid: string }>("SELECT uuid FROM servers WHERE id = ?", [serverId]);
-  if (!server) throw new ApiException(404, "server_not_found", "Server not found");
-  return join(serverDir(server.uuid), folder);
-}

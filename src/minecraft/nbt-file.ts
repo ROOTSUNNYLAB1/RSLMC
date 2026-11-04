@@ -217,10 +217,6 @@ export function str(tag: Tag | undefined): string | null {
   return tag && tag.t === 8 ? tag.v : null;
 }
 
-export function comp(tag: Tag | undefined): Compound | null {
-  return tag && tag.t === 10 ? tag.v : null;
-}
-
 export function list(tag: Tag | undefined): Tag[] {
   return tag && tag.t === 9 ? tag.items : [];
 }

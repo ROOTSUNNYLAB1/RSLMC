@@ -96,20 +96,6 @@ export function nextCronRun(schedule: CronSchedule, from = new Date()): Date | n
   return null;
 }
 
-export function describeCron(expression: string): string {
-  const trimmed = expression.trim();
-  const presets: Record<string, string> = {
-    "0 * * * *": "Every hour",
-    "0 0 * * *": "Every day at 00:00 UTC",
-    "0 4 * * *": "Every day at 04:00 UTC",
-    "0 3 * * 0": "Every Sunday at 03:00 UTC",
-    "*/30 * * * *": "Every 30 minutes",
-    "*/15 * * * *": "Every 15 minutes",
-    "0 0 1 * *": "First day of each month at 00:00 UTC",
-  };
-  return presets[trimmed] ?? `Custom schedule (${trimmed})`;
-}
-
 export function validateCron(expression: string): { ok: boolean; message: string } {
   try {
     const parsed = parseCron(expression);

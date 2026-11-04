@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Ban, Backpack, Crown, ShieldCheck, ShieldOff, UserMinus, UserPlus, Users2, X, Search, History, Hammer,
-} from "lucide-react";
+import { Ban, Backpack, Crown, ShieldCheck, ShieldOff, UserMinus, UserPlus, Users2, Search, History, Hammer } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, StatCard, Tabs, Toggle, Banner } from "../components/ui";
 import { api, errorMessage } from "../lib/api";

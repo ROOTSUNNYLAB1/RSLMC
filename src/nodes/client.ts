@@ -47,11 +47,6 @@ export function getNode(nodeId: number): NodeRow | null {
   return queryOne<NodeRow>("SELECT * FROM nodes WHERE id = ?", [nodeId]);
 }
 
-export function isLocalNode(nodeId: number): boolean {
-  const node = queryOne<{ is_local: number }>("SELECT is_local FROM nodes WHERE id = ?", [nodeId]);
-  return node?.is_local === 1;
-}
-
 export interface NodeResponse {
   ok: boolean;
   status: number;

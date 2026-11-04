@@ -91,7 +91,8 @@ export const SERVER_ROUTE_PERMISSIONS: ServerRouteRule[] = [
   { method: "POST", path: "/api/servers/:id/map/setup", permission: "server.plugins" },
 
   /* File manager and the console socket live in their own routers (file-routes.ts, ws.ts). */
-  { method: "GET", path: "/api/servers/:id/files", permission: ACCESS },
+  // The local route asks for `server.files`, not merely "can reach the server".
+  { method: "GET", path: "/api/servers/:id/files", permission: "server.files" },
   { method: "GET", path: "/api/servers/:id/files/*", permission: "server.files" },
   { method: "POST", path: "/api/servers/:id/files/*", permission: "server.files" },
   { method: "PUT", path: "/api/servers/:id/files/*", permission: "server.files" },
@@ -124,7 +125,7 @@ export function pathMatches(pattern: string, candidate: string): boolean {
   const got = segments(candidate);
   for (let index = 0; index < want.length; index += 1) {
     const part = want[index]!;
-    if (part === "*") return true;                       // trailing wildcard
+    if (part === "*") return true;                       // trailing wildcard (may match nothing)
     if (index >= got.length) return false;
     if (part.startsWith(":")) continue;                  // parameter segment
     if (part !== got[index]) return false;
@@ -162,10 +163,22 @@ export function serverPermissionFor(
       rule: { method: "POST", path: "/api/servers/:id/power", permission: ACCESS },
     };
   }
-  // Longest patterns first, so `/players/:uuid/data` wins over `/players`.
+  /*
+   * Longest patterns first, so `/players/:uuid/data` wins over `/players` — but an exact segment count
+   * beats a trailing wildcard that matched nothing. Without that rule `/api/servers/:id/files/*`
+   * shadowed `/api/servers/:id/files` (five segments sorts before four), so the row for the bare path
+   * was unreachable and the table could disagree with the local route while looking correct.
+   */
   const rules = SERVER_ROUTE_PERMISSIONS
     .filter((rule) => rule.method === verb)
-    .sort((a, b) => segments(b.path).length - segments(a.path).length);
+    .sort((a, b) => {
+      const aSegments = segments(a.path).length;
+      const bSegments = segments(b.path).length;
+      const aExact = pathMatches(a.path, path) && segments(path).length >= aSegments;
+      const bExact = pathMatches(b.path, path) && segments(path).length >= bSegments;
+      if (aExact !== bExact) return aExact ? -1 : 1;
+      return bSegments - aSegments;
+    });
   for (const rule of rules) {
     if (pathMatches(rule.path, path)) return { permission: rule.permission, rule };
   }

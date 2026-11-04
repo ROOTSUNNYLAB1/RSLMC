@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-11-02T17:51:17.618Z",
-  "dataDir": "/tmp/rslmc-pentest-7VMuIK",
-  "total": 140,
+  "generatedAt": "2026-10-31T14:56:14.066Z",
+  "dataDir": "/tmp/rslmc-pentest-2CH8me",
+  "total": 125,
   "failed": 0,
   "areas": [
     {
       "area": "Authentication",
-      "passed": 8,
-      "total": 8,
+      "passed": 6,
+      "total": 6,
       "rows": [
         {
           "id": "auth.1",
@@ -55,22 +55,6 @@
           "name": "Repeated failed logins are rate limited (429)",
           "ok": true,
           "detail": "rate limiter engaged",
-          "severity": "high"
-        },
-        {
-          "id": "audit.l5",
-          "area": "Authentication",
-          "name": "A disabled account answers like any other wrong password",
-          "ok": true,
-          "detail": "unknown 401/invalid_credentials, disabled 401/invalid_credentials",
-          "severity": "high"
-        },
-        {
-          "id": "audit.m2",
-          "area": "Authentication",
-          "name": "An OAuth callback with no state cookie is refused",
-          "ok": true,
-          "detail": "HTTP 302, session issued: false",
           "severity": "high"
         }
       ]
@@ -132,8 +116,8 @@
     },
     {
       "area": "CSRF",
-      "passed": 5,
-      "total": 5,
+      "passed": 3,
+      "total": 3,
       "rows": [
         {
           "id": "auth.8",
@@ -157,22 +141,6 @@
           "name": "Cross-origin mutation is rejected even with a valid token",
           "ok": true,
           "detail": "origin https://evil.example → 403",
-          "severity": "high"
-        },
-        {
-          "id": "auth.10b",
-          "area": "CSRF",
-          "name": "A foreign hostname is still refused (no suffix matching)",
-          "ok": true,
-          "detail": "origin https://panel.pentest.invalid → 403",
-          "severity": "high"
-        },
-        {
-          "id": "auth.10c",
-          "area": "CSRF",
-          "name": "A lookalike origin is refused",
-          "ok": true,
-          "detail": "→ 403",
           "severity": "high"
         }
       ]
@@ -748,8 +716,8 @@
     },
     {
       "area": "Registration",
-      "passed": 2,
-      "total": 2,
+      "passed": 1,
+      "total": 1,
       "rows": [
         {
           "id": "trans.3",
@@ -757,14 +725,6 @@
           "name": "Registration is closed when the administrator has not opened it",
           "ok": true,
           "detail": "→ 403 registration_closed",
-          "severity": "high"
-        },
-        {
-          "id": "audit.h5",
-          "area": "Registration",
-          "name": "The sign-up default role cannot be an administrator role",
-          "ok": true,
-          "detail": "HTTP 400 “Administrator” can reach the administration area, so it cannot be the role for self-registered accounts. Pick a role that only has server-level access (for example User or Viewer).",
           "severity": "high"
         }
       ]
@@ -920,7 +880,7 @@
           "area": "Updates",
           "name": "About reports a CalVer version and the update settings",
           "ok": true,
-          "detail": "2026.11.02.1 interval=360",
+          "detail": "2026.10.31.3 interval=360",
           "severity": "high"
         }
       ]
@@ -967,7 +927,7 @@
           "area": "Single sign-on",
           "name": "A callback without the matching state cookie is refused",
           "ok": true,
-          "detail": "Location → /login?oauth_error=The%20sign-in%20request%20could%20not%20be%20verified%20(the%20state%20cookie%20is%20missing).%20Start%20the%20sign-in%20again%20from%20this%20browser.",
+          "detail": "Location → /login?oauth_error=Discord%20rejected%20the%20sign-in%20(400).",
           "severity": "high"
         },
         {
@@ -975,7 +935,7 @@
           "area": "Single sign-on",
           "name": "The callback never redirects to a caller-supplied host (no open redirect)",
           "ok": true,
-          "detail": "Location → /login?oauth_error=Discord%20rejected%20the%20sign-in%20(400).",
+          "detail": "Location → /login?oauth_error=The%20sign-in%20link%20expired%20or%20was%20already%20used.%2",
           "severity": "high"
         },
         {
@@ -1140,8 +1100,8 @@
     },
     {
       "area": "Nodes",
-      "passed": 12,
-      "total": 12,
+      "passed": 11,
+      "total": 11,
       "rows": [
         {
           "id": "node.1",
@@ -1229,121 +1189,6 @@
           "name": "A traversal attempt through a server path cannot reach node routes",
           "ok": true,
           "detail": "HTTP 400",
-          "severity": "high"
-        },
-        {
-          "id": "audit.m4",
-          "area": "Nodes",
-          "name": "A signed-in user cannot read the node inventory endpoint",
-          "ok": true,
-          "detail": "HTTP 403",
-          "severity": "high"
-        }
-      ]
-    },
-    {
-      "area": "Uploads",
-      "passed": 1,
-      "total": 1,
-      "rows": [
-        {
-          "id": "audit.k1",
-          "area": "Uploads",
-          "name": "An extract upload with a traversing filename writes nothing outside the temp folder",
-          "ok": true,
-          "detail": "HTTP 201, no escaped file",
-          "severity": "high"
-        }
-      ]
-    },
-    {
-      "area": "Roles",
-      "passed": 4,
-      "total": 4,
-      "rows": [
-        {
-          "id": "audit.h1.prep",
-          "area": "Roles",
-          "name": "A delegated helpdesk account can be created for the escalation checks",
-          "ok": true,
-          "detail": "role 201, login 200",
-          "severity": "high"
-        },
-        {
-          "id": "audit.h1",
-          "area": "Roles",
-          "name": "An unknown role name cannot smuggle a powerful role past the grant check",
-          "ok": true,
-          "detail": "HTTP 400, user created: false",
-          "severity": "high"
-        },
-        {
-          "id": "audit.h3",
-          "area": "Roles",
-          "name": "role.manage cannot add a permission the actor does not hold",
-          "ok": true,
-          "detail": "HTTP 403 forbidden",
-          "severity": "high"
-        },
-        {
-          "id": "audit.h4",
-          "area": "Roles",
-          "name": "A non-root user.manage holder cannot delete the root administrator",
-          "ok": true,
-          "detail": "HTTP 403",
-          "severity": "high"
-        }
-      ]
-    },
-    {
-      "area": "Files",
-      "passed": 2,
-      "total": 2,
-      "rows": [
-        {
-          "id": "audit.h2",
-          "area": "Files",
-          "name": "level-name refuses a path instead of joining it onto the server directory",
-          "ok": true,
-          "detail": "HTTP 400 World folder must be a single folder name (letters, numbers, - and _, up to 64 characters) — no slashes or ..",
-          "severity": "high"
-        },
-        {
-          "id": "audit.m8",
-          "area": "Files",
-          "name": "A write through a dangling symlink does not leave the server directory",
-          "ok": true,
-          "detail": "HTTP 404, escaped: false",
-          "severity": "high"
-        }
-      ]
-    },
-    {
-      "area": "Disclosure",
-      "passed": 1,
-      "total": 1,
-      "rows": [
-        {
-          "id": "audit.h7",
-          "area": "Disclosure",
-          "name": "User-written renderer output is sandboxed away from the panel origin",
-          "ok": true,
-          "detail": "HTTP 200 csp=\"sandbox allow-scripts allow-forms allow-popups allow-modals \"",
-          "severity": "high"
-        }
-      ]
-    },
-    {
-      "area": "2FA",
-      "passed": 1,
-      "total": 1,
-      "rows": [
-        {
-          "id": "audit.m5",
-          "area": "2FA",
-          "name": "Resetting two-factor setup needs the current password when 2FA is on",
-          "ok": true,
-          "detail": "HTTP 400 Two-factor authentication is already on. Enter your current password to replace it.",
           "severity": "high"
         }
       ]

@@ -21,10 +21,6 @@ export function javaMajorForMcVersion(mcVersion: string): number {
   return 8;                                                 // 1.16.5 and older
 }
 
-export function javaMajorLabel(major: number): string {
-  return `Java ${major} (Eclipse Temurin)`;
-}
-
 /** Sanity check used by the API before starting a server. */
 export function javaCompatible(
   mcVersion: string,

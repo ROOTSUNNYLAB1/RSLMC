@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { APP_VERSION, PATHS, ROOT_DIR, PORT } from "../shared/config";
-import { insert, query, queryOne, run } from "../database";
+import { insert, query, run } from "../database";
 import { notify } from "../services/notifications";
 import { recordActivity } from "../services/audit";
 import { ApiException } from "../shared/http";
@@ -333,17 +333,8 @@ export function restartSnapshot(): RestartSnapshot {
   };
 }
 
-export function clearRestartRecord(): void {
-  try { rmSync(statePath(), { force: true }); } catch { /* ignore */ }
-}
-
 /** Used by the About page to show how long this process has been up. */
 export function panelUptimeSeconds(): number {
   return Math.round((Date.now() - BOOTED_AT) / 1000);
 }
 
-export function lastRestartRow(): { requested_at: string; boot_ms: number | null } | null {
-  return queryOne<{ requested_at: string; boot_ms: number | null }>(
-    "SELECT requested_at, boot_ms FROM panel_restarts WHERE completed_at IS NOT NULL ORDER BY id DESC LIMIT 1",
-  );
-}

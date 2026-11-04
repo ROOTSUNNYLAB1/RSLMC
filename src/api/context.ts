@@ -44,7 +44,3 @@ export function buildContext(req: Request, url: URL, params: Record<string, stri
   };
 }
 
-export function collectCookies(context: RequestContext, response: Response): Response {
-  const header = context.req.headers.get("x-rslmc-set-cookie-done");
-  return response;
-}

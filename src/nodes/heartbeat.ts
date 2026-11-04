@@ -1,5 +1,5 @@
 import { query, run } from "../database";
-import { getNode, probeNode, nodeRequest, markNodeDown, type NodeRow } from "./client";
+import { probeNode, nodeRequest, markNodeDown, type NodeRow } from "./client";
 import { resolveNodeHost } from "./address";
 
 /**

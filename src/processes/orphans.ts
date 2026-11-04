@@ -177,10 +177,38 @@ export function processStartMark(pid: number): string | null {
   }
 }
 
-/** True only when the pid is alive *and* still the process we recorded. */
-export function isSameProcess(pid: number, mark: string | null | undefined): boolean {
-  if (!isProcessAlive(pid)) return false;
-  if (!mark) return true;                       // no fingerprint was recorded; liveness is all we have
+/**
+ * What we know about a recorded pid.
+ *
+ * `dead`     — the pid is gone. Nothing to signal.
+ * `verified` — alive, and its fingerprint is the one we recorded. Safe to signal.
+ * `mismatch` — alive, but it is not our process (recycled pid, or the fingerprint cannot be read while
+ *              we *do* have one recorded — a failed probe on a platform that just worked is itself a
+ *              reason to stop, not to guess).
+ * `unmarked` — alive, and we never managed to record a fingerprint at spawn/adoption time.
+ *
+ * Three states instead of a boolean because the three answers lead to different actions: `mismatch`
+ * must never be signalled, `unmarked` can only be signalled on liveness alone (and says so loudly),
+ * and `dead` needs no action at all.
+ */
+export type ProcessIdentity = "dead" | "verified" | "mismatch" | "unmarked";
+
+export function checkProcessIdentity(pid: number, mark: string | null | undefined): ProcessIdentity {
+  if (!isProcessAlive(pid)) return "dead";
+  if (!mark) return "unmarked";
   const current = processStartMark(pid);
-  return current === null ? true : current === mark;
+  if (current === null) return "mismatch";      // we had a fingerprint, we cannot read one now: refuse
+  return current === mark ? "verified" : "mismatch";
+}
+
+/**
+ * True only when the pid is alive *and* provably still the process we recorded.
+ *
+ * This is the fail-closed form: an unverifiable pid answers `false`, because the only caller of this
+ * question is about to send a signal. `d79d5ac` answered `true` here for both "no fingerprint" and
+ * "fingerprint unreadable", which quietly restored the pre-fix behaviour on any platform where the
+ * start-time probe failed. Callers that need to distinguish the cases use `checkProcessIdentity`.
+ */
+export function isSameProcess(pid: number, mark: string | null | undefined): boolean {
+  return checkProcessIdentity(pid, mark) === "verified";
 }
