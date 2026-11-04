@@ -791,6 +791,30 @@ decision changes what enforces the limits.
 
 <img src="docs/screenshots/docker-server.png" alt="A running container server with real metrics" width="100%">
 
+#### When the panel says "Docker is not available" but your shell can use it
+
+That is almost never the daemon being down — it is the **account the panel runs as**. On a normal VPS the
+socket is `root:docker 0660` and your shell is root, so `docker pull` works there and the panel gets
+`permission denied`. The wizard now reports the facts instead of guessing:
+
+<img src="docs/screenshots/docker-diagnosis.png" alt="The Docker access diagnosis in the wizard" width="100%">
+
+It names the panel's account and uid, that account's groups, the socket it tried (mode and group), and
+then lists the fixes in order — with the one detail people miss: **a running process does not pick up a
+new group**, so `usermod -aG docker` alone changes nothing until the panel is restarted.
+
+| Fix | How |
+|---|---|
+| Give the panel's account the socket group | `sudo usermod -aG docker <panel-user>` then **restart the panel** |
+| Let the panel use sudo for docker only | sudoers `rslmc ALL=(root) NOPASSWD: /usr/bin/docker` + `RSLMC_DOCKER_SUDO=1` |
+| Point the panel at another socket | `RSLMC_DOCKER_HOST=unix:///run/user/1000/docker.sock` (rootless Docker, Podman, TCP proxy) |
+
+The panel also checks for rootless/Podman sockets and for `/run/docker.sock`, and only suggests one that
+is a **different** daemon (a symlink to the same socket is filtered out — suggesting it would send you in
+a circle). "Check again" re-probes without a reload.
+
+
+
 ### Files, properties, players, worlds, plugins
 
 * **Files** — breadcrumb navigation, upload (multipart), mkdir, rename/move, copy, bulk delete,
@@ -1091,7 +1115,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (40 files, 414 tests)
+bun run test                          # every suite, one process per file (40 files, 417 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

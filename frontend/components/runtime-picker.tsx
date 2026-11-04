@@ -19,6 +19,19 @@ import { formatBytes } from "../lib/format";
 
 export type RuntimeChoice = "standalone" | "docker";
 
+interface DockerAccess {
+  user: string;
+  uid: number | null;
+  groups: string[];
+  endpoint: string;
+  socketExists: boolean;
+  socketMode: string | null;
+  socketGroup: string | null;
+  groupMissing: boolean;
+  alternatives: string[];
+  hints: string[];
+}
+
 interface DockerInfo {
   available: boolean;
   version: string | null;
@@ -26,6 +39,7 @@ interface DockerInfo {
   cgroupVersion: string | null;
   diskQuota: boolean;
   reason: string | null;
+  access?: DockerAccess | null;
 }
 
 interface JavaImage {
@@ -160,10 +174,65 @@ export function RuntimePicker({
       </div>
 
       {dockerBlocked ? (
-        <Banner tone="warning" title="Docker is not usable on this machine">
-          {docker?.reason}
-          {" "}The standalone option keeps working; container servers can be enabled later without recreating anything.
-        </Banner>
+        <div className="docker-diag">
+          <Banner tone="warning" title="Docker is installed, but the panel cannot reach its daemon">
+            {docker?.access?.hints?.[0] ?? docker?.reason}
+          </Banner>
+          {/*
+            The facts, not just the error text. "Docker works in my shell but not in the panel" almost
+            always means the panel's account is not in the socket's group — showing which account, which
+            socket and which group makes that obvious instead of mysterious.
+          */}
+          {docker?.access ? (
+            <div className="info-list docker-facts">
+              <div className="info-row">
+                <span className="k">Panel account</span>
+                <span className="v mono">{docker.access.user}{docker.access.uid !== null ? ` (uid ${docker.access.uid})` : ""}</span>
+              </div>
+              <div className="info-row">
+                <span className="k">Its groups</span>
+                <span className="v mono">{docker.access.groups.join(", ") || "—"}</span>
+              </div>
+              <div className="info-row">
+                <span className="k">Socket</span>
+                <span className="v mono">
+                  {docker.access.endpoint}
+                  {docker.access.socketExists ? ` · ${docker.access.socketMode ?? ""}${docker.access.socketGroup ? ` · group ${docker.access.socketGroup}` : ""}` : " · not found"}
+                </span>
+              </div>
+              {docker.access.groupMissing ? (
+                <div className="info-row">
+                  <span className="k">Missing</span>
+                  <span className="v">the <span className="mono">{docker.access.socketGroup}</span> group on this account</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="docker-fixes">
+            {(docker?.access?.hints ?? (docker?.reason ? [docker.reason] : [])).map((hint, index) => (
+              <div className="runtime-note" key={hint}>
+                <span className="docker-fix-index">{index + 1}</span>
+                <span>
+                  {hint.split(/(`[^`]+`|— |RSLMC_[A-Z_]+=[^ ]+)/).map((part, partIndex) => (
+                    part.startsWith("`") || part.startsWith("RSLMC_")
+                      ? <span className="mono" key={partIndex}>{part.replace(/`/g, "")}</span>
+                      : <span key={partIndex}>{part}</span>
+                  ))}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="row" style={{ gap: 8 }}>
+            <Button icon={<RefreshCw size={12} />} onClick={() => void load()} disabled={loading}>
+              Check again
+            </Button>
+            <span className="text-xs faint">
+              The standalone option keeps working; a server can be moved to Docker later without recreating it.
+            </span>
+          </div>
+        </div>
       ) : null}
 
       {value === "docker" && docker?.available ? (

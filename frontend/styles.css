@@ -3126,3 +3126,25 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
   color: #8ab6f0;
   background: rgba(93, 156, 236, 0.08);
 }
+
+/* Docker access diagnosis: facts + numbered fixes, so "permission denied" is actionable. */
+.docker-diag { display: flex; flex-direction: column; gap: 10px; }
+
+.docker-facts { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+
+.docker-fixes { display: flex; flex-direction: column; gap: 8px; }
+
+.docker-fix-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong, #3a3c44);
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1;
+}

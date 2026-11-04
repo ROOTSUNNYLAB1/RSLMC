@@ -199,3 +199,78 @@ describe("the container launch plan", () => {
   // Cleanup: the temp dir is removed at exit rather than per test, so the row stays usable.
   process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
 });
+
+
+/*
+ * "Docker works in my shell but the panel says it is not available."
+ *
+ * That was a real report: the operator's shell was root, the panel ran as an unprivileged user, and the
+ * socket is root:docker 0660. The old message said "start the daemon", which is the wrong advice and
+ * sends people hunting in the wrong place. These tests drive a fake CLI so the *diagnosis* is asserted,
+ * not just the fact that a daemon is missing.
+ */
+describe("access diagnosis", () => {
+  const fake = (body: string) => {
+    const path = join(tmpdir(), `rslmc-fake-docker-${Math.random().toString(36).slice(2)}.sh`);
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return path;
+  };
+
+  test("a socket the panel's account cannot open is reported as a group problem", () => {
+    // What the real daemon returns: exit code 0, empty fields, and the error inside ServerErrors.
+    const binary = fake(
+      'cat <<JSON\n{"ServerVersion":"","Driver":"","ServerErrors":["permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock"]}\nJSON',
+    );
+    const previous = process.env.RSLMC_DOCKER_BIN;
+    process.env.RSLMC_DOCKER_BIN = binary;
+    try {
+      const info = docker.probeDocker(true);
+      expect(info.available).toBe(false);
+      const access = info.access!;
+      expect(access).toBeTruthy();
+      expect(access.endpoint).toContain("docker.sock");
+      expect(access.hints.length).toBeGreaterThan(0);
+      // The fix must name the group and the restart, because adding the group alone does not help.
+      const all = access.hints.join(" ");
+      expect(all).toMatch(/docker group|usermod/);
+      expect(all).toMatch(/restart/i);
+      // And it must say which account is affected.
+      expect(all).toContain(access.user);
+    } finally {
+      if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
+      else process.env.RSLMC_DOCKER_BIN = previous;
+      docker.probeDocker(true);
+    }
+  }, 60_000);
+
+  test("a missing daemon is reported as a missing daemon, with the start command", () => {
+    const binary = fake('cat <<JSON\n{"ServerVersion":"","ServerErrors":["Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"]}\nJSON');
+    const previous = process.env.RSLMC_DOCKER_BIN;
+    process.env.RSLMC_DOCKER_BIN = binary;
+    try {
+      const info = docker.probeDocker(true);
+      expect(info.available).toBe(false);
+      const hints = (info.access?.hints ?? []).join(" ");
+      expect(hints).toMatch(/systemctl start docker|Docker Desktop/);
+      // It must not blame a permission problem that does not exist.
+      expect(hints).not.toMatch(/usermod/);
+    } finally {
+      if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
+      else process.env.RSLMC_DOCKER_BIN = previous;
+      docker.probeDocker(true);
+    }
+  }, 60_000);
+
+  test("RSLMC_DOCKER_HOST decides which daemon is contacted", () => {
+    const previousHost = process.env.RSLMC_DOCKER_HOST;
+    process.env.RSLMC_DOCKER_HOST = "unix:///run/user/1000/docker.sock";
+    try {
+      expect(docker.dockerEndpoint()).toBe("unix:///run/user/1000/docker.sock");
+      expect(docker.dockerHostArgs()).toEqual(["-H", "unix:///run/user/1000/docker.sock"]);
+    } finally {
+      if (previousHost === undefined) delete process.env.RSLMC_DOCKER_HOST;
+      else process.env.RSLMC_DOCKER_HOST = previousHost;
+    }
+    expect(docker.dockerHostArgs()).toEqual([]);
+  });
+});

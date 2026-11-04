@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { userInfo } from "node:os";
 
 /*
  * Docker, the way the panel uses it.
@@ -14,6 +15,26 @@ import { existsSync } from "node:fs";
  * "pretend Docker" path: when the CLI or the daemon is missing, the panel says so and the wizard will
  * not offer the option.
  */
+
+/** Everything the panel knows about *why* Docker is or is not usable here. */
+export interface DockerAccess {
+  /** The unix user the panel process runs as — the account whose socket access is being tested. */
+  user: string;
+  uid: number | null;
+  /** Groups of that user, by name. */
+  groups: string[];
+  /** The socket (or TCP endpoint) the CLI tried. */
+  endpoint: string;
+  socketExists: boolean;
+  socketMode: string | null;
+  socketGroup: string | null;
+  /** True when the socket exists and the panel's user is neither root nor in the socket's group. */
+  groupMissing: boolean;
+  /** Alternative sockets that exist on this machine (rootless Docker, Podman). */
+  alternatives: string[];
+  /** Copy-pasteable fixes, most appropriate first. */
+  hints: string[];
+}
 
 export interface DockerInfo {
   /** True only when the CLI answered `docker info` — i.e. a daemon is reachable. */
@@ -31,6 +52,8 @@ export interface DockerInfo {
   reason: string | null;
   cliPath: string | null;
   checkedAt: number;
+  /** Filled whenever the probe ran; the reason is written from these facts, not guessed. */
+  access?: DockerAccess | null;
 }
 
 interface CommandResult {
@@ -67,6 +90,43 @@ const INFO_TTL_MS = 15_000;
  * `stdin: "ignore"` matters: `docker` reading a terminal it does not have is how a panel hangs on a
  * dead daemon instead of reporting it.
  */
+/**
+ * Extra arguments that decide *which* daemon is talked to.
+ *
+ * `RSLMC_DOCKER_HOST` (and the conventional `DOCKER_HOST`) are honoured because the default socket is
+ * not the only real one: rootless Docker listens on `$XDG_RUNTIME_DIR/docker.sock`, Podman on
+ * `/run/podman/podman.sock`, and a hardened host may only expose a TCP endpoint. Without this the panel
+ * insists on `/var/run/docker.sock` while the operator's own `docker` command talks to something else —
+ * which is exactly "docker works in my shell but not in the panel".
+ */
+export function dockerHostArgs(): string[] {
+  const host = process.env.RSLMC_DOCKER_HOST?.trim() || process.env.DOCKER_HOST?.trim();
+  return host ? ["-H", host] : [];
+}
+
+/** The endpoint the CLI will use, for the diagnosis. */
+export function dockerEndpoint(): string {
+  const host = process.env.RSLMC_DOCKER_HOST?.trim() || process.env.DOCKER_HOST?.trim();
+  if (host) return host;
+  if (process.platform === "win32") return "npipe:////./pipe/docker_engine";
+  return "unix:///var/run/docker.sock";
+}
+
+/**
+ * `sudo -n docker …`, when the operator asked for it.
+ *
+ * This is the escape hatch for the common VPS layout: the panel runs as an unprivileged account, the
+ * socket is `root:docker 0660`, and adding the account to the group needs a service restart. With a
+ * `NOPASSWD` sudoers entry and `RSLMC_DOCKER_SUDO=1` the panel can use the daemon without being root
+ * itself. `-n` is deliberate: a password prompt would hang a daemon probe forever.
+ */
+function sudoPrefix(): string[] {
+  const wanted = (process.env.RSLMC_DOCKER_SUDO ?? "").trim() === "1";
+  if (!wanted) return [];
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  return uid === 0 ? [] : ["sudo", "-n"];
+}
+
 export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult {
   // An explicit override wins over probing: an operator who points RSLMC_DOCKER_BIN at a binary
   // means it, and a failure must be reported for that binary rather than silently using PATH.
@@ -75,7 +135,7 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
     return true;                                    // bare name: let PATH decide
   }) ?? "docker";
   try {
-    const result = Bun.spawnSync([bin, ...args], {
+    const result = Bun.spawnSync([...sudoPrefix(), bin, ...args], {
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
@@ -110,7 +170,7 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
 export async function dockerCommandAsync(args: string[], timeoutMs = 20_000): Promise<CommandResult> {
   const bin = process.env.RSLMC_DOCKER_BIN ?? dockerBin();
   try {
-    const child = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const child = Bun.spawn([...sudoPrefix(), bin, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, timeoutMs);
     const [stdout, stderr] = await Promise.all([
       new Response(child.stdout as ReadableStream<Uint8Array>).text(),
@@ -176,12 +236,16 @@ export function probeDocker(force = false): DockerInfo {
   const info = dockerCommand(["info", "--format", "{{json .}}"], 15_000);
   if (!info.ok) {
     const stderr = `${info.stderr}${info.stdout}`.trim();
-    cachedInfo = emptyInfo(
-      "Docker is installed but its daemon is not answering. "
-      + `${firstLine(stderr) || "docker info failed"}`
-      + " Start the daemon (systemctl start docker / launch Docker Desktop) and press Check again.",
-      cliVersion.ok ? cliVersion.stdout.trim() : null,
-    );
+    const access = diagnoseAccess(stderr);
+    cachedInfo = {
+      ...emptyInfo(
+        "Docker is installed but its daemon could not be reached from the panel. "
+        + `${firstLine(stderr) || "docker info failed"}${access.hints.length > 0 ? ` — ${access.hints[0]}` : ""}`
+        + " Start the daemon (systemctl start docker / launch Docker Desktop) and press Check again.",
+        cliVersion.ok ? cliVersion.stdout.trim() : null,
+      ),
+      access,
+    };
     cacheAt = now;
     return cachedInfo;
   }
@@ -198,10 +262,15 @@ export function probeDocker(force = false): DockerInfo {
   const serverVersion = String(parsed.ServerVersion ?? "").trim();
   if (serverErrors.length > 0 || !serverVersion) {
     const detail = serverErrors[0] ?? "the daemon returned no server version";
-    const hint = /permission denied/i.test(detail)
-      ? " This account is not allowed to use the Docker socket — add it to the `docker` group (Linux) and restart the panel."
-      : "";
-    cachedInfo = emptyInfo(`Docker is installed but the daemon refused the request: ${detail}.${hint}`, cliVersion.ok ? cliVersion.stdout.trim() : null);
+    const access = diagnoseAccess(detail);
+    cachedInfo = {
+      ...emptyInfo(
+        `Docker is installed but the daemon refused the request: ${detail}.`
+        + (access.hints.length > 0 ? ` ${access.hints[0]}` : ""),
+        cliVersion.ok ? cliVersion.stdout.trim() : null,
+      ),
+      access,
+    };
     cacheAt = now;
     return cachedInfo;
   }
@@ -230,9 +299,166 @@ export function probeDocker(force = false): DockerInfo {
     reason: null,
     cliPath: dockerBin(),
     checkedAt: now,
+    access: collectAccessFacts([]),
   };
   cacheAt = now;
   return cachedInfo;
+}
+
+/**
+ * Works out *why* the daemon is unreachable, from facts on this machine rather than from the message.
+ *
+ * The single most common case is not "the daemon is down": it is the panel running as a user that is
+ * not in the socket's group, while the operator's own shell is root — so `docker pull` works for them
+ * and not for the panel. Saying "start the daemon" in that situation sends people in the wrong
+ * direction, which is exactly what happened when this shipped.
+ */
+export function diagnoseAccess(detail: string): DockerAccess {
+  const permission = /permission denied|access denied|not authorized/i.test(detail);
+  const missingSocket = /no such file or directory|cannot connect|connection refused/i.test(detail);
+  const hints: string[] = [];
+  const facts = collectAccessFacts(hints);
+
+  if (permission) {
+    if (facts.uid === 0) {
+      hints.push(
+        `The panel runs as root and was still refused, so the daemon is probably listening somewhere else (rootless Docker or Podman). `
+        + `Point the panel at it: RSLMC_DOCKER_HOST=${facts.alternatives[0] ?? "unix:///run/user/<uid>/docker.sock"}.`,
+      );
+    } else {
+      hints.push(
+        `The panel runs as "${facts.user}" (uid ${facts.uid}) but ${facts.endpoint} is ${facts.socketMode ?? "not readable"}`
+        + `${facts.socketGroup ? ` owned by group "${facts.socketGroup}"` : ""}. `
+        + `Add that account to the docker group — sudo usermod -aG docker ${facts.user} — then restart the panel: `
+        + "a running process does not pick up a new group, which is why it keeps failing after the usual fix.",
+      );
+      hints.push(
+        `Alternatively let the panel use sudo for docker: add "rslmc ALL=(root) NOPASSWD: /usr/bin/docker" to sudoers and set RSLMC_DOCKER_SUDO=1.`,
+      );
+      if (facts.alternatives.length > 0) {
+        hints.push(`Rootless/Podman socket found at ${facts.alternatives[0]} — set RSLMC_DOCKER_HOST=unix://${facts.alternatives[0]} instead.`);
+      }
+    }
+  } else if (missingSocket) {
+    hints.push(`Nothing is listening on ${facts.endpoint}. Start the daemon: systemctl start docker (Linux) or open Docker Desktop.`);
+    if (facts.alternatives.length > 0) {
+      hints.push(`A socket does exist at ${facts.alternatives[0]} — set RSLMC_DOCKER_HOST=unix://${facts.alternatives[0]}.`);
+    }
+  } else {
+    hints.push(`Check "docker info" as the "${facts.user}" account; the CLI reported: ${firstLine(detail) || "no detail"}.`);
+  }
+  return { ...facts, hints };
+}
+
+/**
+ * The machine facts the hints are written from.
+ *
+ * Read from the running process, not from the environment: `/proc/self/status` lists the *supplementary*
+ * groups the panel actually holds, which is the whole question. Comparing a socket's group against
+ * `process.getgid()` (the primary group only) reports "not in the docker group" for somebody who is.
+ */
+function collectAccessFacts(_hints: string[]): DockerAccess {
+  const endpoint = dockerEndpoint();
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+
+  let user = "unknown";
+  try {
+    const info = userInfo();
+    user = info.username;
+    if (user === "unknown" && info.uid !== undefined) user = `uid ${info.uid}`;
+  } catch { /* not every platform exposes this */ }
+
+  const groupIds = processGroupIds();
+
+  let socketExists = false;
+  let socketMode: string | null = null;
+  let socketGroup: string | null = null;
+  let socketGid: number | null = null;
+  let socketIsSocket = false;
+  if (endpoint.startsWith("unix://")) {
+    const path = endpoint.slice("unix://".length);
+    try {
+      const stat = statSync(path);
+      socketExists = true;
+      socketIsSocket = stat.isSocket();
+      socketGid = stat.gid;
+      socketMode = `mode ${(stat.mode & 0o777).toString(8)}`;
+      socketGroup = groupNameFor(stat.gid);
+    } catch { /* socket absent */ }
+  }
+
+  /*
+   * Other sockets a daemon may be publishing. Checked because "Docker works in my shell" usually means
+   * exactly one of these: the operator's CLI has DOCKER_HOST set, or rootless Docker / Podman is what is
+   * actually running.
+   */
+  const alternatives: string[] = [];
+  for (const candidate of [
+    `/run/user/${uid ?? 0}/docker.sock`,
+    `/run/user/${uid ?? 0}/podman/podman.sock`,
+    "/run/podman/podman.sock",
+    "/run/docker.sock",
+  ]) {
+    if (candidate === endpoint.replace(/^unix:\/\//, "")) continue;
+    try {
+      /*
+       * `/run/docker.sock` is usually a symlink to `/var/run/docker.sock` — the same daemon the panel
+       * just failed to reach. Reporting it as "an alternative socket you could use" would send somebody
+       * in a circle, so identities are compared after resolving symlinks.
+       */
+      const resolved = realpathSync(candidate);
+      const endpointResolved = endpoint.startsWith("unix://") ? realpathSync(endpoint.slice(7)) : endpoint;
+      if (resolved === endpointResolved) continue;
+      if (statSync(resolved).isSocket()) alternatives.push(candidate);
+    } catch { /* not present */ }
+  }
+
+  const groupMissing = socketExists && socketGid !== null && uid !== null && uid !== 0
+    && !groupIds.includes(socketGid);
+
+  return {
+    user,
+    uid,
+    groups: [...new Set(groupIds.map((gid) => groupNameFor(gid)))],
+    endpoint,
+    socketExists: socketExists && socketIsSocket,
+    socketMode,
+    socketGroup,
+    groupMissing,
+    alternatives,
+    hints: [],
+  };
+}
+
+/** The groups this process really holds — supplementary ones included. */
+function processGroupIds(): number[] {
+  try {
+    const status = readFileSync("/proc/self/status", "utf8");
+    const line = status.split("\n").find((entry) => entry.startsWith("Groups:"));
+    if (line) {
+      const ids = line.slice("Groups:".length).trim().split(/\s+/).map(Number).filter((value) => Number.isInteger(value));
+      if (ids.length > 0) return ids;
+    }
+  } catch { /* not Linux */ }
+  const gid = typeof process.getgid === "function" ? process.getgid() : null;
+  return gid === null ? [] : [gid];
+}
+
+let groupTableCache: Map<number, string> | null = null;
+
+/** gid → name from /etc/group, cached. Falls back to the number, which is still useful in a hint. */
+function groupNameFor(gid: number): string {
+  if (!groupTableCache) {
+    groupTableCache = new Map();
+    try {
+      for (const line of readFileSync("/etc/group", "utf8").split("\n")) {
+        const parts = line.split(":");
+        const id = Number(parts[2]);
+        if (parts[0] && Number.isInteger(id)) groupTableCache.set(id, parts[0]);
+      }
+    } catch { /* no /etc/group: numbers only */ }
+  }
+  return groupTableCache.get(gid) ?? String(gid);
 }
 
 function emptyInfo(reason: string, version: string | null = null): DockerInfo {

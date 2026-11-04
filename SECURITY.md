@@ -286,12 +286,18 @@ enforces it. The old honest caveat — "partly enforced" — becomes "enforced b
 
 | Failure | Behaviour |
 |---|---|
-| No daemon / socket permission denied | `docker info` exits 0 with an empty document and `ServerErrors`; the probe reads that and reports the daemon's own message. Create refuses with `docker_unavailable`; the wizard disables the option |
+| No daemon / socket permission denied | `docker info` **exits 0** with an empty document and `ServerErrors`; the probe reads that, then diagnoses the *cause* from the machine — which account the panel runs as, its real supplementary groups (`/proc/self/status`), the socket's mode/group, and other sockets present — and reports the fixes in order. Create refuses with `docker_unavailable`; the wizard shows the diagnosis and disables the option |
 | Image missing at start | pulled first, progress streamed into the console; a failed pull is `502 image_pull_failed` with the CLI's message |
 | Leftover container from a crash | removed before `docker run` so the name is reusable; a container still running from a previous panel session is adopted and shown as `recovering` |
 | `docker stats` on a stopped container | returns nulls, so no metrics are published — the last sample is never presented as live |
 | Kill | `docker kill` + `docker rm -f`, with a bounded wait for removal; a pid-tree walk cannot reach a containerised JVM |
 | Deleted server | its container is removed with it, so the port and the name are freed |
+
+**Privileges.** `RSLMC_DOCKER_SUDO=1` runs the CLI through `sudo -n` (never an interactive prompt, which
+would hang a probe). It is opt-in and the sudoers entry should name the docker binary, not `ALL`; the
+panel never asks for root for anything else. `RSLMC_DOCKER_HOST` is honoured because the default socket
+is not the only real endpoint (rootless Docker, Podman, TCP proxy) — without it the panel would insist on
+`/var/run/docker.sock` while the operator's own CLI talks elsewhere.
 
 **Tests.** `tests/docker.test.ts` asserts the real command line (memory, swap, cpus, bind mount, path
 translation, quota only when supported, reference validation). `tests/docker-live.test.ts` starts a
@@ -364,7 +370,7 @@ real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the dae
 ```bash
 cd rslmc
 bun install
-bun test                              # 414 unit/integration tests (40 files)
+bun test                              # 417 unit/integration tests (40 files)
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```
