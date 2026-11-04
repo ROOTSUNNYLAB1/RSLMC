@@ -234,12 +234,26 @@ describe("access diagnosis", () => {
       expect(access).toBeTruthy();
       expect(access.endpoint).toContain("docker.sock");
       expect(access.hints.length).toBeGreaterThan(0);
-      // The fix must name the group and the restart, because adding the group alone does not help.
       const all = access.hints.join(" ");
-      expect(all).toMatch(/docker group|usermod/);
-      expect(all).toMatch(/restart/i);
-      // And it must say which account is affected.
+      /*
+       * What is true on every machine: the refusal is reported against the account and endpoint, the
+       * raw command and output are attached, and "start the daemon" is not offered for a permission
+       * error (that was the original bug report).
+       *
+       * What is *not* asserted unconditionally is the group advice: it only applies when the account
+       * really is outside the socket's group, and a CI runner with Docker preinstalled is already in
+       * it. Asserting it here made this suite pass locally and fail on GitHub, which is worse than a
+       * narrower test — the branch itself is pinned by the constructed-facts tests below.
+       */
       expect(all).toContain(access.user);
+      expect(all).not.toMatch(/Nothing is answering/);
+      expect(access.evidence?.command).toContain("info");
+      expect(access.evidence?.stderr).toMatch(/permission denied/);
+      if (access.groupMissing) {
+        // `usermod` alone does not work on a running process; the restart has to be in the same breath.
+        expect(all).toMatch(/usermod/);
+        expect(all).toMatch(/restart/i);
+      }
     } finally {
       if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
       else process.env.RSLMC_DOCKER_BIN = previous;
