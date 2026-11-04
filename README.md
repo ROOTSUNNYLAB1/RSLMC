@@ -795,6 +795,13 @@ decision changes what enforces the limits.
   all say *granted of requested* ("cpus 2.00 (of 4.00 requested — host has 2.00)"), the wizard warns
   before the server is created, and a `container_rejected` / `invalid_cpu_limit` crash cause explains the
   old behaviour if an older build produced one.
+A crash that comes from Docker rather than from Minecraft is named as such, and a process the kernel
+killed is not left as a bare number: exit code 137 (= 128 + 9, SIGKILL) is reported as the out-of-memory
+killer, `docker: Error response from daemon: …` quotes the daemon, and a CPU request above the machine is
+called out with the real core count.
+
+<img src="docs/screenshots/docker-cpu-clamp.png" alt="A 400% allocation shown as 4.00 requested / 2.00 granted on a two-core host" width="100%">
+
 * **Switch later.** Settings → Runtime moves a stopped server between the two runtimes without
   touching its files.
 
@@ -1153,7 +1160,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (41 files, 439 tests)
+bun run test                          # every suite, one process per file (41 files, 441 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

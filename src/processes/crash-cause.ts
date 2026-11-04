@@ -60,6 +60,21 @@ export function explainCrash(input: CrashInput): CrashCause {
       message: "The JVM reported java.lang.OutOfMemoryError before exiting. Raise the memory allocation.",
     };
   }
+  /*
+   * A shell reports a killed child as 128 + the signal number, so the OOM killer arrives as "code 137"
+   * rather than as a signal — and this panel printed "exited with code 137 and the console does not name
+   * a cause" for a server the kernel had just killed. 137 = 128 + 9 (SIGKILL), 135 = SIGBUS.
+   */
+  if (exit === 137 || exit === 135) {
+    const signalName = exit === 137 ? "SIGKILL" : "SIGBUS";
+    return {
+      kind: "killed",
+      message:
+        `The process was killed by the operating system (exit code ${exit} = 128 + ${exit === 137 ? 9 : 7}, ${signalName}) `
+        + "instead of exiting on its own — on a small host this is almost always the out-of-memory killer, especially "
+        + "when the console showed \"Can't keep up!\" first. Check free memory, or allocate less to this server.",
+    };
+  }
   if (signal === "SIGKILL" || signal === "SIGBUS") {
     return {
       kind: "killed",

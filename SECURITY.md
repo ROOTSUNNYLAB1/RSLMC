@@ -393,7 +393,7 @@ real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the dae
 ```bash
 cd rslmc
 bun install
-bun test                              # 439 unit/integration tests (41 files)
+bun test                              # 441 unit/integration tests (41 files)
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```

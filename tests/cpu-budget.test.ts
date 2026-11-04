@@ -105,3 +105,17 @@ describe("a container that Docker refused explains itself", () => {
     expect(cause.kind).toBe("out_of_memory");
   });
 });
+
+describe("a killed process is named, not left as a mystery code", () => {
+  test("exit code 137 is the OOM killer, and the message says so", () => {
+    const cause = explainCrash({ lines: [{ text: "[16:54:13 WARN]: Can't keep up! Is the server overloaded?" }], exitCode: 137 });
+    expect(cause.kind).toBe("killed");
+    expect(cause.message).toContain("137");
+    expect(cause.message).toMatch(/out-of-memory killer/);
+  });
+
+  test("a signal-based kill still reads the same way", () => {
+    const cause = explainCrash({ lines: [{ text: "" }], signalCode: "SIGKILL" });
+    expect(cause.kind).toBe("killed");
+  });
+});

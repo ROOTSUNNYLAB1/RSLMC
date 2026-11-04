@@ -427,7 +427,8 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
                       title={`Docker cannot give a container more CPU than the machine has. ${server.cpuBudget.requestedCores.toFixed(2)} cores were requested; ${server.cpuBudget.grantedCores.toFixed(2)} are granted on this ${server.cpuBudget.hostCores.toFixed(2)}-core host.`}
                     >
                       {cpuAllocationLabel(server.cpuPercent)}
-                      <span className="faint"> · granting {server.cpuBudget.grantedCores.toFixed(2)} on {server.cpuBudget.hostCores.toFixed(2)} cores</span>
+                      {/* Short enough to survive the ellipsis; the tooltip and the console carry the rest. */}
+                      <span className="faint"> · grants {server.cpuBudget.grantedCores.toFixed(2)}</span>
                     </span>
                   ) : (
                     cpuAllocationLabel(server.cpuPercent)
