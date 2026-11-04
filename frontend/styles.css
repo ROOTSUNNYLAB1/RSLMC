@@ -2879,3 +2879,95 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
 @media (prefers-reduced-motion: reduce) {
   .about-hero, .update-strip, .install-step.running { animation: none; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Ping meter (Minecraft-style bars next to the server address)        */
+/* ------------------------------------------------------------------ */
+
+.ping-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 7px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  cursor: default;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+/* Bars keep their shape and never reflow: the same five slots, filled from the left. */
+.ping-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 16px;
+}
+
+.ping-bar {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border-strong, #3a3c44);
+  opacity: 0.5;
+  transition: background 220ms ease, opacity 220ms ease, transform 220ms ease;
+}
+
+.ping-bar.on {
+  opacity: 1;
+  transform-origin: bottom;
+  animation: ping-bar-in 260ms ease both;
+}
+
+@keyframes ping-bar-in {
+  from { transform: scaleY(0.55); }
+  to { transform: scaleY(1); }
+}
+
+.ping-value {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.ping-good .ping-bar.on { background: var(--green); }
+.ping-good .ping-value { color: var(--green-text); }
+.ping-good { border-color: var(--green-line); background: var(--green-soft); }
+
+.ping-ok .ping-bar.on { background: var(--green-strong, #6ee7a0); }
+.ping-ok .ping-value { color: var(--green-text); }
+
+.ping-fair .ping-bar.on { background: var(--amber); }
+.ping-fair .ping-value { color: var(--amber-text); }
+.ping-fair { border-color: rgba(227, 179, 65, 0.35); }
+
+.ping-poor .ping-bar.on { background: var(--red); }
+.ping-poor .ping-value { color: var(--red-text, #f08a8a); }
+.ping-poor { border-color: rgba(239, 91, 91, 0.35); }
+
+.ping-unknown .ping-bar.on { background: var(--text-faint); }
+.ping-unknown .ping-value { color: var(--text-faint); }
+
+/* A stopped server: the network is fine, the port is not open. Says so with a hollow dot. */
+.ping-port-closed {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--text-faint);
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ping-bar, .ping-pill { transition: none; }
+  .ping-bar.on { animation: none; }
+}
+
+/* Address row: the copyable address and its ping sit on one line, and wrap only when narrow. */
+.row-gap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}

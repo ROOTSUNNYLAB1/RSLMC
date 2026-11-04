@@ -32,6 +32,7 @@ import { describeEnforcement } from "../resources/enforcement";
 import type { RequestContext } from "../shared/http";
 import type { ServerSoftwareId } from "../shared/types";
 import { hostStats } from "../resources/host";
+import { measureGamePort } from "../services/ping";
 
 function requireServer(ctx: RequestContext, permission?: Parameters<typeof requireServerAccess>[2]) {
   const id = Number(ctx.params.id);
@@ -260,6 +261,31 @@ export function registerServerRoutes(api: Router): void {
       default: throw badRequest("Action must be start, stop, restart or kill");
     }
     return json({ ok: true, status: runtimeState(id).status });
+  });
+
+  /* ---------------- Latency ---------------- */
+
+  /*
+   * The ping shown next to the address. Two real measurements, no guesswork:
+   *
+   *   - `server` is a TCP handshake to the game port from the machine that hosts it (this panel for a
+   *     local server, the node itself for a remote one, because the request is forwarded).
+   *   - `hopMs` is how long the controller waited for the node, so the UI can subtract it when it
+   *     reports the user's own round trip instead of quietly adding two network paths together.
+   *
+   * A stopped server answers `reachable: false, reason: "refused"` — the port is closed, which is not
+   * the same thing as a ping of zero.
+   */
+  api.get("/api/servers/:id/ping", async (ctx) => {
+    const id = requireServer(ctx);
+    const server = getServer(id);
+    const result = await measureGamePort(server.bindIp, server.port);
+    return json({
+      server: result,
+      address: `${server.bindIp}:${server.port}`,
+      playAddress: server.playAddress ?? server.address,
+      status: server.status,
+    });
   });
 
   /* ---------------- Console ---------------- */

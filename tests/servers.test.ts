@@ -168,6 +168,31 @@ describe("creating a server through the API", () => {
     expect(body.error.message).toContain(String(firstPort));
   }, 30_000);
 
+  /*
+   * The ping next to the address (round 53). While the server is stopped the game port is closed, so
+   * the honest answer is "nothing is listening" — not a small number. That is exactly what this checks:
+   * the route exists, it dials the address the server will use, and it reports the refusal instead of
+   * inventing a latency.
+   */
+  test("the ping route reports the real state of the game port", async () => {
+    const response = await api(`/api/servers/${createdId}/ping`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    const db = new Database(join(DATA_DIR, "database", "rslmc.db"), { readonly: true });
+    const row = db.query("SELECT bind_ip, port FROM servers WHERE id = ?").get(createdId) as any;
+    db.close();
+    // A wildcard bind is dialled over loopback: that is the port the players would reach.
+    expect(body.server.target).toBe(`127.0.0.1:${row.port}`);
+    expect(body.address).toBe(`${row.bind_ip}:${row.port}`);
+    expect(typeof body.server.reachable).toBe("boolean");
+    if (!body.server.reachable) {
+      expect(body.server.ms).toBeNull();
+      expect(["refused", "timeout"]).toContain(body.server.reason as string);
+    } else {
+      expect(body.server.ms).toBeGreaterThanOrEqual(0);
+    }
+  }, 30_000);
+
   test("creating without accepting the EULA is refused", async () => {
     const response = await api("/api/servers", { method: "POST", body: serverPayload({ name: "No Eula", acceptEula: false }) });
     expect(response.status).toBe(400);

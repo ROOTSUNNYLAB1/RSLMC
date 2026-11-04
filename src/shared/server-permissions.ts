@@ -39,6 +39,8 @@ export const SERVER_ROUTE_PERMISSIONS: ServerRouteRule[] = [
   { method: "GET", path: "/api/servers/:id/console", permission: ACCESS },
   { method: "POST", path: "/api/servers/:id/console", permission: "server.command" },
   { method: "GET", path: "/api/servers/:id/metrics", permission: ACCESS },
+  // Reachability of the game port: needs no more than being able to see the server.
+  { method: "GET", path: "/api/servers/:id/ping", permission: ACCESS },
 
   { method: "GET", path: "/api/servers/:id/properties", permission: ACCESS },
   { method: "PUT", path: "/api/servers/:id/properties", permission: ["server.settings", "server.files"] },

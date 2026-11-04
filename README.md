@@ -746,6 +746,15 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
 * `tests/console-detect.test.ts` covers the colour-code regression, bracketed join messages, leave /
   disconnect lines and unrelated output (`bun test`).
 
+* **Ping next to the address** — the five bars and millisecond figure Minecraft puts next to a
+  server in the multiplayer list, measured rather than invented: the bars follow the round trip your
+  own browser makes to the panel (`performance.now()` around the request), and the tooltip reports a
+  separate TCP handshake to the game port taken on the machine that hosts it. While a server is
+  stopped the port is closed, so it shows a hollow dot — "refused", not a flattering `0 ms`. Checks
+  every 5 s while running, every 15 s while stopped, with `prefers-reduced-motion` respected.
+
+<img src="docs/ping-meter.png" alt="Ping meter beside the server address" width="100%">
+
 <img src="docs/screenshots/players-violet.png" alt="Players page" width="100%">
 
 
@@ -1049,7 +1058,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (36 files, 349 tests)
+bun run test                          # every suite, one process per file (37 files, 361 tests)
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
 bun run typecheck                     # tsc --noEmit, strict

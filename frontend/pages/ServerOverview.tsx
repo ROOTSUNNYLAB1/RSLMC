@@ -7,6 +7,7 @@ import type { ServerSummary, ServerStatus } from "../../src/shared/types";
 import { Button, Card, CopyValue, InfoList, PageHeader, Pill, ProgressBar, StatCard, Banner, Loading, Modal } from "../components/ui";
 import { ConsolePanel, mergeLines, type ConsoleLine } from "../components/console";
 import { LineChart } from "../components/charts";
+import { PingMeter } from "../components/ping";
 import { Link, useRouter } from "../lib/router";
 import { useSession, useToast } from "../lib/app";
 import { api, ApiError, errorMessage } from "../lib/api";
@@ -388,7 +389,12 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
                 { key: "Status", value: <Pill tone={statusTone(status)} dot>{statusLabel(status)}</Pill> },
                 {
                   key: "Address",
-                  value: <CopyValue value={server.playAddress ?? server.address} title={server.publicHost ? `Players join with ${server.playAddress}` : "Copy the server address"} />,
+                  value: (
+                    <span className="row-gap">
+                      <CopyValue value={server.playAddress ?? server.address} title={server.publicHost ? `Players join with ${server.playAddress}` : "Copy the server address"} />
+                      <PingMeter serverId={serverId} running={running} />
+                    </span>
+                  ),
                 },
                 ...(server.publicHost
                   ? [{ key: "Internal", value: <span className="mono faint text-xs">{server.internalAddress ?? `${server.bindIp}:${server.port}`}</span> }]

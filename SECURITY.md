@@ -323,7 +323,7 @@ the *new* code — which turned out to be two bugs, not one.
 ```bash
 cd rslmc
 bun install
-bun test                              # 349 unit/integration tests (36 files)
+bun test                              # 361 unit/integration tests (37 files)
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```
