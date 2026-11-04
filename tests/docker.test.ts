@@ -444,3 +444,54 @@ describe("the endpoint the panel really uses", () => {
     }
   }, 60_000);
 });
+
+/*
+ * "The wizard offered Docker, the server started, and docker said permission denied."
+ *
+ * The probe ran `sudo -n docker info`; the launch ran `docker run` with no prefix, because
+ * buildLaunchPlan assembled its own argv from dockerBin() alone. Exit code 126, a crashed server, and a
+ * panel that had just told the operator Docker was available. Probe and launch now share one prefix
+ * builder, and this test asserts the launch — the command that actually runs a server — carries it.
+ */
+describe("the launch uses the same docker prefix as the probe", () => {
+  const plan = (env: Record<string, string | undefined>) => {
+    const saved: Record<string, string | undefined> = {};
+    for (const key of Object.keys(env)) { saved[key] = process.env[key]; if (env[key] === undefined) delete process.env[key]; else process.env[key] = env[key]!; }
+    try {
+      const row = {
+        id: 1, uuid: "86de0f81-5bd7-4e6a-85c4-bffb02137965", name: "Prefix", runtime: "docker",
+        docker_image: "ghcr.io/pterodactyl/yolks:java_21", memory_mb: 2048, cpu_percent: 250,
+        disk_mb: 4096, docker_disk_quota: 0, java_major: 21, port: 25570, bind_ip: "0.0.0.0",
+        software: "paper", mc_version: "1.21.4", jar_file: "server.jar", directory: "/tmp/prefix-test",
+      };
+      return buildLaunchPlan(row as any);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  };
+
+  test("sudo is carried into `docker run`, not only into the probe", () => {
+    const withSudo = plan({ RSLMC_DOCKER_SUDO: "1", RSLMC_DOCKER_HOST: undefined, RSLMC_DOCKER_BIN: "/usr/bin/docker" });
+    const argv = withSudo.command as string[];
+    // Root bypasses the prefix, so the assertion has to be conditional on the test's own uid.
+    const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+    if (!isRoot) {
+      expect(argv[0]).toBe("sudo");
+      expect(argv[1]).toBe("-n");
+      expect(argv[2]).toBe("/usr/bin/docker");
+    }
+    expect(argv).toContain("run");
+  });
+
+  test("an endpoint override is carried into `docker run` too", () => {
+    const withHost = plan({ RSLMC_DOCKER_SUDO: undefined, RSLMC_DOCKER_HOST: "unix:///run/podman/podman.sock" });
+    const argv = withHost.command as string[];
+    // `docker -H <endpoint> run …`: the host flag sits between the binary and the subcommand.
+    const hostFlag = argv.indexOf("-H");
+    expect(hostFlag).toBeGreaterThan(0);
+    expect(argv[hostFlag + 1]).toBe("unix:///run/podman/podman.sock");
+    expect(argv.indexOf("run")).toBeGreaterThan(hostFlag);
+  });
+});

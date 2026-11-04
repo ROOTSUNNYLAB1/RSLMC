@@ -823,6 +823,11 @@ is never invisible.
 Precedence, highest first: `RSLMC_DOCKER_HOST` → the saved panel setting → `DOCKER_HOST` → the platform
 default (`unix:///var/run/docker.sock`, `npipe://…` on Windows).
 
+Whatever is in force is used by **everything**, not just the probe: `RSLMC_DOCKER_SUDO` and the endpoint sit
+in front of `docker run` as well as `docker info`, so a panel that can *see* the daemon can also start a
+container on it. (That was a real bug: the wizard said Docker was available and the server then died with
+`permission denied`, exit 126, because the launch built its own argv.)
+
 **If the panel is unprivileged**, the original diagnosis still applies — the account, the socket's mode
 and group, and the detail people miss: **a running process does not pick up a new group**, so
 `usermod -aG docker` alone changes nothing until the panel is restarted.
@@ -1139,7 +1144,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (40 files, 427 tests)
+bun run test                          # every suite, one process per file (40 files, 429 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

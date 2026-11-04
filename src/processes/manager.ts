@@ -11,7 +11,7 @@ import { installServerSoftware, softwareDefinition } from "../minecraft/provider
 import { ensureRuntime, resolveExecutable, runtimeInfo, runtimeIsUsable } from "../java/manager";
 import { applyLimits, attachProcess, detectCgroups, killCgroup, readUsage, removeCgroup, resolveMemoryUsage } from "../resources/cgroups";
 import {
-  containerNameFor, containerStatsAsync, dockerBin, imagePresent, inspectContainer, killContainer,
+  containerNameFor, containerStatsAsync, dockerInvocation, imagePresent, inspectContainer, killContainer,
   probeDocker, pullImage, removeContainer,
 } from "../runtime/docker";
 import { imageForMajor } from "../runtime/images";
@@ -474,7 +474,8 @@ function buildDockerPlan(input: {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   const gid = typeof process.getgid === "function" ? process.getgid() : null;
 
-  const args: string[] = [dockerBin(), "run", "--rm", "-i", "--init", "--name", container];
+  // Prefix from the runtime, so `RSLMC_DOCKER_SUDO` / `RSLMC_DOCKER_HOST` reach the launch too.
+  const args: string[] = dockerInvocation(["run", "--rm", "-i", "--init", "--name", container]);
 
   // Real, kernel-enforced limits.
   const memoryMb = heapMbFor(server.memory_mb);

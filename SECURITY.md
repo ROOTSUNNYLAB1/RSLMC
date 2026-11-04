@@ -294,7 +294,9 @@ enforces it. The old honest caveat — "partly enforced" — becomes "enforced b
 | Deleted server | its container is removed with it, so the port and the name are freed |
 
 **Privileges.** `RSLMC_DOCKER_SUDO=1` runs the CLI through `sudo -n` (never an interactive prompt, which
-would hang a probe). It is opt-in and the sudoers entry should name the docker binary, not `ALL`; the
+would hang a probe) — and applies to the container launch, not only to the probe: the launch prefix comes
+from the same `dockerInvocation()` the probes use, so "the wizard offered Docker and the server died with
+`permission denied`" cannot recur. It is opt-in and the sudoers entry should name the docker binary, not `ALL`; the
 panel never asks for root for anything else. `RSLMC_DOCKER_HOST` is honoured because the default socket
 is not the only real endpoint (rootless Docker, Podman, TCP proxy) — without it the panel would insist on
 `/var/run/docker.sock` while the operator's own CLI talks elsewhere.
@@ -390,7 +392,7 @@ real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the dae
 ```bash
 cd rslmc
 bun install
-bun test                              # 427 unit/integration tests (40 files)
+bun test                              # 429 unit/integration tests (40 files)
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```

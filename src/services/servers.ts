@@ -92,7 +92,17 @@ export function mapServer(row: any): ServerSummary {
     lastStartedAt: row.last_started_at,
     installedAt: row.installed_at,
     usage: (() => {
-      if (!live || !state.pid) return null;
+      if (!live) return null;
+      /*
+       * A container server has no useful `/proc` entry: `state.pid` is the relay (or the CLI), so a
+       * process-tree read reported 7 MB for a JVM the daemon measured at 428 MiB. The container's own
+       * accounting is the only honest number, and it is what the memory limit is enforced against.
+       */
+      if (row.runtime === "docker") {
+        const metrics = currentMetrics(row.id);
+        return { cpuPercent: metrics.cpuPercent, memBytes: metrics.memBytes, cpuSource: metrics.cpuSource ?? "docker" };
+      }
+      if (!state.pid) return null;
       const peek = peekProcess(state.pid);
       return { cpuPercent: peek.cpuPercent, memBytes: peek.rssBytes, cpuSource: peek.source };
     })(),

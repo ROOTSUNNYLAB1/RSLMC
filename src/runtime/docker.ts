@@ -194,6 +194,18 @@ function sudoPrefix(): string[] {
   return uid === 0 ? [] : ["sudo", "-n"];
 }
 
+/**
+ * The complete argv the panel would run for a docker subcommand.
+ *
+ * Exported because the *launch* path builds its own array (`docker run …`) and used to start it with
+ * `dockerBin()` alone — so a panel configured with `RSLMC_DOCKER_SUDO=1` or `RSLMC_DOCKER_HOST` passed
+ * the probe (which did use the prefix) and then failed at start with `permission denied`, exit 126. The
+ * probe and the launch must never be able to disagree again, so both take their prefix from here.
+ */
+export function dockerInvocation(args: string[]): string[] {
+  return [...sudoPrefix(), dockerBin(), ...dockerHostArgs(), ...args];
+}
+
 /** True when the panel process is already privileged — root, or Administrator on Windows. */
 export function panelIsElevated(): boolean {
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
