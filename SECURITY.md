@@ -290,6 +290,7 @@ enforces it. The old honest caveat — "partly enforced" — becomes "enforced b
 | Image missing at start | pulled first, progress streamed into the console; a failed pull is `502 image_pull_failed` with the CLI's message |
 | Leftover container from a crash | removed before `docker run` so the name is reusable; a container still running from a previous panel session is adopted and shown as `recovering` |
 | `docker stats` on a stopped container | returns nulls, so no metrics are published — the last sample is never presented as live |
+| `--cpus` larger than the host | refused by the daemon with exit 125 before the JVM runs. The value is clamped to `docker info`'s NCPU (or the panel's own cores) and the difference is reported — a limit that cannot be granted is never presented as if it were |
 | Kill | `docker kill` + `docker rm -f`, with a bounded wait for removal; a pid-tree walk cannot reach a containerised JVM |
 | Deleted server | its container is removed with it, so the port and the name are freed |
 
@@ -392,7 +393,7 @@ real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the dae
 ```bash
 cd rslmc
 bun install
-bun test                              # 429 unit/integration tests (40 files)
+bun test                              # 439 unit/integration tests (41 files)
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```

@@ -17,6 +17,7 @@ import {
 import { imageForMajor } from "../runtime/images";
 import { sampleProcess, peekProcess } from "../resources/process-stats";
 import { directorySizeSync } from "../resources/host";
+import { cpuBudget, type CpuBudget } from "../resources/cpu-budget";
 import { freemem } from "node:os";
 import { scrubSecrets } from "../security/redact";
 import { normalizeBindIp, isTcpPortFree, isValidPort } from "../services/net";
@@ -357,7 +358,11 @@ export interface LaunchPlan {
   shellScript: string | null;
   preview: string;
   /** Set when the plan runs inside Docker: the container name and the image it is built from. */
-  docker?: { container: string; image: string; network: string } | null;
+  docker?: {
+    container: string; image: string; network: string;
+    /** What the allocation asked for, and what the machine can actually grant. */
+    cpu: CpuBudget;
+  } | null;
 }
 
 /**
@@ -483,7 +488,14 @@ function buildDockerPlan(input: {
   // Give the JVM headroom for metaspace/stacks inside the same budget: the container limit is the
   // allocation, the heap is what the JVM is told to use.
   args.push("--memory-swap", `${server.memory_mb}m`);
-  args.push("--cpus", (Math.max(10, server.cpu_percent) / 100).toFixed(2));
+  /*
+   * CPU is the one limit Docker will not quietly accept: `--cpus 4` on a two-core box is an error
+   * (exit 125, "range of CPUs is from 0.01 to 2.00") and the server never starts. The allocation stays
+   * what the operator asked for; the grant is clamped to the daemon's own core count and the
+   * difference is reported in the preview, in the console at start, and on the server's resource note.
+   */
+  const cpu = cpuBudget(server.cpu_percent, probeDocker().cpuCount);
+  args.push("--cpus", cpu.grantedCores.toFixed(2));
   const quotaMb = server.disk_mb ?? 0;
   if (quotaMb > 0 && server.docker_disk_quota) {
     args.push("--storage-opt", `size=${quotaMb}m`);
@@ -510,9 +522,12 @@ function buildDockerPlan(input: {
   inner.push(...serverArgs);
 
   const command = [...args, ...inner];
-  const preview = `docker run ${container} → ${image} | memory ${server.memory_mb} MB · cpus ${(Math.max(10, server.cpu_percent) / 100).toFixed(2)} | ${inner.join(" ")}`;
+  const cpuLabel = cpu.clamped
+    ? `cpus ${cpu.grantedCores.toFixed(2)} (of ${cpu.requestedCores.toFixed(2)} requested — host has ${cpu.hostCores.toFixed(2)})`
+    : `cpus ${cpu.grantedCores.toFixed(2)}`;
+  const preview = `docker run ${container} → ${image} | memory ${server.memory_mb} MB · ${cpuLabel} | ${inner.join(" ")}`;
   void memoryMb;
-  return { command, cwd: directory, shellScript: null, preview, docker: { container, image, network } };
+  return { command, cwd: directory, shellScript: null, preview, docker: { container, image, network, cpu } };
 }
 
 function prepareJvmArgsFile(server: ServerRow, directory: string): void {
@@ -677,8 +692,12 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
     let enforcementMessage: string | null = null;
     if (plan.docker) {
       const quota = server.docker_disk_quota ? "disk quota enforced by the storage driver" : "disk usage is reported but not capped (this storage driver cannot enforce it)";
-      enforcementMessage = `Docker container limits: memory ${server.memory_mb} MB, CPU ${(Math.max(10, server.cpu_percent) / 100).toFixed(2)} cores — kernel-enforced; ${quota}.`;
+      const cpuLabel = plan.docker.cpu.clamped
+        ? `${plan.docker.cpu.grantedCores.toFixed(2)} of ${plan.docker.cpu.requestedCores.toFixed(2)} cores`
+        : `${plan.docker.cpu.grantedCores.toFixed(2)} cores`;
+      enforcementMessage = `Docker container limits: memory ${server.memory_mb} MB, CPU ${cpuLabel} — kernel-enforced; ${quota}.`;
       systemLine(serverId, enforcementMessage);
+      if (plan.docker.cpu.note) systemLine(serverId, plan.docker.cpu.note);
     } else if (capabilities.privileged) {
       const limits = applyLimits({
         serverId,

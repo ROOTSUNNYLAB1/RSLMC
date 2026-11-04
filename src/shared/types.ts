@@ -159,6 +159,19 @@ export interface ServerSummary {
   playersOnline: number;
   maxPlayers: number;
   enforcement: ResourceEnforcement | null;
+  /**
+   * Docker only: what the CPU allocation will really be granted.
+   *
+   * `--cpus` above the daemon's core count is an error, not a queue, so the panel clamps and says so
+   * instead of pretending 400% is in force on a two-core box.
+   */
+  cpuBudget?: {
+    requestedCores: number;
+    grantedCores: number;
+    hostCores: number;
+    clamped: boolean;
+    source: string;
+  } | null;
 }
 
 export interface ServerMetrics {

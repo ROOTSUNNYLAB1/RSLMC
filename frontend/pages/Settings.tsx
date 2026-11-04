@@ -158,7 +158,14 @@ export function SettingsPage({ server }: { server: ServerSummary }) {
             >
               <Input type="number" min={128} max={65536} step={128} value={form.memoryMb} onChange={(event) => setForm({ ...form, memoryMb: Number(event.target.value) })} />
             </Field>
-            <Field label="CPU allocation (%)" hint={cpuAllocationLabel(form.cpuPercent)}>
+            <Field
+              label="CPU allocation (%)"
+              hint={
+                server.runtime === "docker" && server.cpuBudget?.requestedCores && server.cpuBudget.requestedCores > (server.cpuBudget.hostCores ?? 0)
+                  ? `${cpuAllocationLabel(form.cpuPercent)} — this host offers ${server.cpuBudget.hostCores.toFixed(2)} cores and Docker refuses more, so the container starts with that many.`
+                  : `${cpuAllocationLabel(form.cpuPercent)}${server.runtime === "docker" && server.cpuBudget ? ` — host offers ${server.cpuBudget.hostCores.toFixed(2)} cores` : ""}`
+              }
+            >
               <Input type="number" min={10} max={1600} step={10} value={form.cpuPercent} onChange={(event) => setForm({ ...form, cpuPercent: Number(event.target.value) })} />
             </Field>
             <Field label="Disk target (MB)" hint="Soft limit unless the host supports real quotas.">

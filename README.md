@@ -786,6 +786,15 @@ decision changes what enforces the limits.
   from one hard-coded story (see below), and the create call refuses with `docker_unavailable` instead
   of storing a server that can never start. A kill goes through `docker kill` + `rm -f`, because a
   pid-tree walk cannot reach a containerised JVM.
+* **CPU is clamped to the machine, and the clamp is reported.** `docker run --cpus 4.00` on a 2-core box
+  is not a queue — the daemon refuses it (`range of CPUs is from 0.01 to 2.00, as there are only 2 CPUs
+  available`, exit 125) and the server never starts, while crash recovery loops. Allocations are written
+  in CPU-percent, so a 400% allocation is an easy thing to type on a small VPS. The panel therefore asks
+  the daemon how many cores it has (`docker info` → NCPU, falling back to the panel's own core count) and
+  clamps `--cpus` to it: the preview line, the console at start and the server's **CPU allocation** row
+  all say *granted of requested* ("cpus 2.00 (of 4.00 requested — host has 2.00)"), the wizard warns
+  before the server is created, and a `container_rejected` / `invalid_cpu_limit` crash cause explains the
+  old behaviour if an older build produced one.
 * **Switch later.** Settings → Runtime moves a stopped server between the two runtimes without
   touching its files.
 
@@ -1144,7 +1153,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (40 files, 429 tests)
+bun run test                          # every suite, one process per file (41 files, 439 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

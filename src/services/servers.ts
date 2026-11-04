@@ -8,6 +8,7 @@ import { ApiException } from "../shared/http";
 import { MIN_ALLOCATION_MB, MAX_ALLOCATION_MB } from "../shared/memory";
 import { playAddress, normalisePublicHost, validatePublicPort } from "../shared/address";
 import { describeEnforcement } from "../resources/enforcement";
+import { cpuBudget } from "../resources/cpu-budget";
 import { getNode, nodeRequestOrThrow, createLink, linkForServer, dropLink } from "../nodes/client";
 import { javaMajorForMcVersion } from "../minecraft/java-requirements";
 import { defaultJvmArgsFor } from "../minecraft/jvm-presets";
@@ -112,6 +113,15 @@ export function mapServer(row: any): ServerSummary {
       readMaxPlayers(row) ?? 20,
     ),
     enforcement,
+    cpuBudget: row.runtime === "docker"
+      ? (() => {
+          const budget = cpuBudget(row.cpu_percent, probeDocker().cpuCount);
+          return {
+            requestedCores: budget.requestedCores, grantedCores: budget.grantedCores,
+            hostCores: budget.hostCores, clamped: budget.clamped, source: budget.source,
+          };
+        })()
+      : null,
   };
 }
 

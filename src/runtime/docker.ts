@@ -89,6 +89,13 @@ export interface DockerInfo {
   cgroupVersion: string | null;
   /** Docker's own default runtime, so the UI can say what will execute the container. */
   runtimes: string[];
+  /**
+   * The CPUs the daemon can hand out (`docker info` → NCPU).
+   *
+   * Not cosmetic: `docker run --cpus` is refused outright when it asks for more than this, with exit
+   * code 125 and no server at all. The launch clamps against this number rather than guessing.
+   */
+  cpuCount: number | null;
   /** Whether `--storage-opt size=` can actually be honoured on this driver. */
   diskQuota: boolean;
   /** Human explanation when something is missing, e.g. the CLI is not installed. */
@@ -423,6 +430,7 @@ export function probeDocker(force = false): DockerInfo {
   const cgroupVersion = parsed.CgroupVersion ? String(parsed.CgroupVersion) : null;
   const runtimesRaw = parsed.Runtimes as Record<string, unknown> | undefined;
   const runtimes = runtimesRaw ? Object.keys(runtimesRaw) : [];
+  const cpuCount = Number(parsed.NCPU) > 0 ? Number(parsed.NCPU) : null;
 
   /*
    * Disk quota support is not "the driver supports storage-opt" in the abstract: overlay2 only
@@ -439,6 +447,7 @@ export function probeDocker(force = false): DockerInfo {
     storageDriver,
     cgroupVersion,
     runtimes,
+    cpuCount,
     diskQuota,
     reason: null,
     cliPath: dockerBin(),
@@ -756,7 +765,7 @@ function groupNameFor(gid: number): string {
 function emptyInfo(reason: string, version: string | null = null): DockerInfo {
   return {
     available: false, version, apiVersion: null, storageDriver: null, cgroupVersion: null,
-    runtimes: [], diskQuota: false, reason, cliPath: cachedCli, checkedAt: Date.now(),
+    runtimes: [], cpuCount: null, diskQuota: false, reason, cliPath: cachedCli, checkedAt: Date.now(),
   };
 }
 

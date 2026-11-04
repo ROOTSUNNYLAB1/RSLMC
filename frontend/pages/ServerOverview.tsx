@@ -414,7 +414,25 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
                 { key: "Version", value: server.mcVersion },
                 { key: "Java", value: detail.java ? `${detail.java.vendor ?? "Temurin"} ${detail.java.major} (${detail.java.version})` : `Java ${server.javaMajor} (installed on start)` },
                 { key: "Allocated RAM", value: `${server.memoryMb} MB` },
-                { key: "CPU allocation", value: cpuAllocationLabel(server.cpuPercent) },
+                {
+                  key: "CPU allocation",
+                  value: server.cpuBudget?.clamped ? (
+                    /*
+                     * Docker refuses --cpus larger than the daemon's core count, so an allocation of
+                     * 400% on a two-core host is not "waiting for cores" — it would simply not start.
+                     * Show what is granted next to what was asked for.
+                     */
+                    <span
+                      style={{ cursor: "help" }}
+                      title={`Docker cannot give a container more CPU than the machine has. ${server.cpuBudget.requestedCores.toFixed(2)} cores were requested; ${server.cpuBudget.grantedCores.toFixed(2)} are granted on this ${server.cpuBudget.hostCores.toFixed(2)}-core host.`}
+                    >
+                      {cpuAllocationLabel(server.cpuPercent)}
+                      <span className="faint"> · granting {server.cpuBudget.grantedCores.toFixed(2)} on {server.cpuBudget.hostCores.toFixed(2)} cores</span>
+                    </span>
+                  ) : (
+                    cpuAllocationLabel(server.cpuPercent)
+                  ),
+                },
                 { key: "Disk", value: formatBytes(diskAllocated) },
                 {
                   key: "Resource limits",

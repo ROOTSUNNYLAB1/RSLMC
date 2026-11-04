@@ -13,7 +13,8 @@ import type { ConsoleLine } from "../shared/types";
 export interface CrashCause {
   kind:
     | "out_of_memory" | "native_threads" | "killed" | "port_in_use" | "world_corrupt"
-    | "bad_jar" | "watchdog" | "unknown";
+    | "bad_jar" | "watchdog" | "container_rejected" | "container_unreachable"
+    | "invalid_cpu_limit" | "unknown";
   /** One sentence an operator can act on. */
   message: string;
 }
@@ -110,6 +111,43 @@ export function explainCrash(input: CrashInput): CrashCause {
     return {
       kind: "world_corrupt",
       message: "A world file could not be read. Restore a backup of this world from the Backups page.",
+    };
+  }
+  /*
+   * Docker rejected the container command itself.
+   *
+   * The console is full of server lines and then a *docker* line, and the exit code (125) belongs to the
+   * CLI, not to Minecraft — that is why the crash said "code signal relay-disconnected" and named no
+   * cause. Real report: `range of CPUs is from 0.01 to 2.00, as there are only 2 CPUs available`, from a
+   * 400% allocation on a two-core VPS. Checked before the generic branches so the daemon's own words
+   * reach the operator instead of a puzzle.
+   */
+  const cpuRange = /range of CPUs is from ([\d.]+) to ([\d.]+), as there are only (\d+) CPUs? available/i.exec(log);
+  if (cpuRange) {
+    return {
+      kind: "invalid_cpu_limit",
+      message:
+        `The CPU allocation asks for more cores than this machine has — Docker only has ${cpuRange[3]} `
+        + `and accepts up to ${cpuRange[2]} cores. RSLMC clamps the value at launch, so this container was started `
+        + "by a build that did not: lower the allocation in Settings → Resources, or run on a larger node.",
+    };
+  }
+  const dockerError = /docker: Error response from daemon: ([^\n]+)/i.exec(log);
+  if (dockerError) {
+    return {
+      kind: "container_rejected",
+      message:
+        `Docker refused to create the container: ${dockerError[1].trim()} `
+        + "The server never started — this is a Docker-side problem, not a Minecraft one: check the image, "
+        + "the limits and the daemon's health, then start it again.",
+    };
+  }
+  if (/docker: (?:Cannot connect to the Docker daemon|permission denied while trying to connect)/i.test(log)) {
+    return {
+      kind: "container_unreachable",
+      message:
+        "Docker could not be reached, so the container never started (not a Minecraft failure). "
+        + "The wizard's Docker diagnosis shows the account, socket and endpoint the panel used — fix that, then start again.",
     };
   }
   const code = exit === null ? (signal ? `signal ${signal}` : "an unknown code") : `code ${exit}`;

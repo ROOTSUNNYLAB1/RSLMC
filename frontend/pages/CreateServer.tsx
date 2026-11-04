@@ -30,6 +30,11 @@ export function CreateServerPage() {
   const [step, setStep] = useState(1);
   const [catalog, setCatalog] = useState<SoftwareDefinition[]>([]);
   const [nodes, setNodes] = useState<NodeInfo[]>([]);
+  /*
+   * The machine's real core count, used to warn before an allocation is created that Docker will
+   * refuse — `--cpus` above this is an error (exit 125), not a queue.
+   */
+  const [hostCores, setHostCores] = useState<number>(0);
   const [users, setUsers] = useState<{ id: number; username: string }[]>([]);
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
@@ -63,6 +68,7 @@ export function CreateServerPage() {
     api.get<{ cpuCores: number; memoryTotalBytes: number }>("/api/system/host")
       .then((host) => {
         const cores = Math.max(1, Math.min(16, host.cpuCores || 1));
+        setHostCores(cores);
         const halfGb = (host.memoryTotalBytes || 0) / 1024 ** 3 / 2;
         const suggested = Math.min(4096, Math.max(1024, Math.round((halfGb * 1024) / 256) * 256));
         setForm((current) => ({
@@ -343,7 +349,14 @@ export function CreateServerPage() {
                 <span className="text-xs faint">MB</span>
               </div>
             </Field>
-            <Field label="CPU allocation" hint={cpuAllocationLabel(form.cpuPercent)}>
+            <Field
+              label="CPU allocation"
+              hint={
+                form.runtime === "docker" && hostCores > 0 && Number(form.cpuPercent) > hostCores * 100
+                  ? `${cpuAllocationLabel(form.cpuPercent)} — this machine has ${hostCores} CPU${hostCores === 1 ? "" : "s"}, and Docker refuses a container asking for more. It will be started with ${hostCores * 100}% and the difference is reported on the server page.`
+                  : `${cpuAllocationLabel(form.cpuPercent)}${form.runtime === "docker" && hostCores > 0 ? ` — this machine has ${hostCores} CPU${hostCores === 1 ? "" : "s"}` : ""}`
+              }
+            >
               <Input type="number" min={10} max={1600} step={10} value={form.cpuPercent} onChange={(event) => setForm({ ...form, cpuPercent: Number(event.target.value) })} />
             </Field>
             <Field label="Disk target" hint="A soft limit used for warnings unless the host filesystem supports real quotas.">
@@ -381,7 +394,15 @@ export function CreateServerPage() {
                   <div className="info-row"><span className="k">Image</span><span className="v mono text-xs">{form.dockerImage || `Java ${form.javaMajor}`}</span></div>
                   <div className="info-row">
                     <span className="k">Limits</span>
-                    <span className="v">{form.memoryMb} MB · {(Math.max(10, Number(form.cpuPercent)) / 100).toFixed(2)} cores, enforced by the container</span>
+                    <span className="v">
+                      {form.memoryMb} MB · {(() => {
+                        const wanted = Number((Math.max(10, Number(form.cpuPercent)) / 100).toFixed(2));
+                        const grant = hostCores > 0 ? Math.min(wanted, hostCores) : wanted;
+                        return grant < wanted
+                          ? `${grant.toFixed(2)} of ${wanted.toFixed(2)} cores (machine has ${hostCores}), enforced by the container`
+                          : `${grant.toFixed(2)} cores, enforced by the container`;
+                      })()}
+                    </span>
                   </div>
                 </>
               ) : (
@@ -390,7 +411,15 @@ export function CreateServerPage() {
               <div className="info-row"><span className="k">Node</span><span className="v">{nodes.find((node) => node.id === form.nodeId)?.name ?? "—"}</span></div>
               <div className="info-row"><span className="k">Address</span><span className="v mono">{form.bindIp}:{form.port}</span></div>
               <div className="info-row"><span className="k">Memory</span><span className="v">{form.memoryMb} MB</span></div>
-              <div className="info-row"><span className="k">CPU</span><span className="v">{cpuAllocationLabel(form.cpuPercent)}</span></div>
+              <div className="info-row">
+                <span className="k">CPU</span>
+                <span className="v">
+                  {cpuAllocationLabel(form.cpuPercent)}
+                  {form.runtime === "docker" && hostCores > 0 && Number(form.cpuPercent) > hostCores * 100
+                    ? ` · capped to ${hostCores}.00`
+                    : ""}
+                </span>
+              </div>
               <div className="info-row"><span className="k">Disk target</span><span className="v">{form.diskMb} MB</span></div>
               <div className="info-row"><span className="k">Auto-start</span><span className="v">{form.autoStart ? "Yes" : "No"}</span></div>
               <div className="info-row"><span className="k">Crash recovery</span><span className="v">{form.crashRecovery ? "Restart automatically" : "Off"}</span></div>

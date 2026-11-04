@@ -152,7 +152,10 @@ describe("the container launch plan", () => {
     expect(command[command.indexOf("--memory") + 1]).toBe("2048m");
     // swap is pinned to the same value, so the JVM cannot silently dip into swap past its budget
     expect(command[command.indexOf("--memory-swap") + 1]).toBe("2048m");
-    expect(command[command.indexOf("--cpus") + 1]).toBe("2.50");
+    // 250% is granted as asked on a machine with at least three cores; on a smaller one the clamp
+    // applies, so assert the number rather than the literal, and check it never exceeds the machine.
+    const granted = Number(command[command.indexOf("--cpus") + 1]);
+    expect(granted).toBe(Math.min(2.5, plan.docker!.cpu.hostCores));
   }, 30_000);
 
   test("the server directory is bind-mounted at /data and the jar path is translated", () => {
@@ -192,6 +195,24 @@ describe("the container launch plan", () => {
     expect(plan.command[0]).not.toContain("docker");
     expect(plan.docker ?? null).toBeNull();
     expect(plan.command.join(" ")).toContain("-jar");
+  }, 30_000);
+
+  /*
+   * The bug this pins: `--cpus 4.00` on a 2-core host is not a queue, it is an error. Docker answers
+   * "range of CPUs is from 0.01 to 2.00" with exit code 125 and the server never starts — while the
+   * panel happily stored a 400% allocation and crash recovery looped.
+   */
+  test("--cpus never exceeds the cores the machine actually has", () => {
+    const plan = buildLaunchPlan({ ...row, cpu_percent: 4000 } as any);
+    const argv = plan.command as string[];
+    const granted = Number(argv[argv.indexOf("--cpus") + 1]);
+    expect(Number.isFinite(granted)).toBe(true);
+    expect(granted).toBeGreaterThan(0);
+    expect(granted).toBeLessThanOrEqual(plan.docker!.cpu.hostCores);
+    // And the plan admits the clamp rather than showing the request as if it were in force.
+    expect(plan.docker!.cpu.clamped).toBe(true);
+    expect(plan.preview).toContain(`cpus ${granted.toFixed(2)}`);
+    expect(plan.preview).toContain("requested");
   }, 30_000);
 
   test("the preview says what will be enforced, in plain words", () => {
