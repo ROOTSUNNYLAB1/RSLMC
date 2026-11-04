@@ -5,7 +5,8 @@ import { buildFrontend, ensureFrontendBuilt, staticFile } from "./services/front
 import { handleApiRequest, describeRoutes } from "./api";
 import { upgradeWebSocket, websocketHandlers, startWsHeartbeat, wsStats } from "./api/ws";
 import { startScheduler, stopScheduler } from "./services/schedules";
-import { adoptRelays, handOffForPanelRestart, reconcileForeignProcesses, runningServerCount, shutdownAll, waitForIdle } from "./processes/manager";
+import { adoptRelays, handOffForPanelRestart, reconcileContainers, reconcileForeignProcesses, runningServerCount, shutdownAll, waitForIdle } from "./processes/manager";
+import { probeDocker } from "./runtime/docker";
 import { completeRestartOnBoot, registerRestartHandlers } from "./update/restart";
 import { startUpdateWatcher, stopUpdateWatcher } from "./update/service";
 import { hostStats } from "./resources/host";
@@ -56,6 +57,23 @@ async function main(): Promise<void> {
   } catch (error) {
     console.error(`[rslmc] orphan reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  /*
+   * Containers outlive the panel too, and they cannot be found by scanning /proc. Once at boot (and
+   * only when the daemon answers) the panel asks Docker what is still running, so a container server
+   * shows "recovering" instead of the stale status left in SQLite.
+   */
+  const reconcileDockerOnce = () => {
+    try {
+      const docker = probeDocker();
+      if (!docker.available) return;
+      const result = reconcileContainers();
+      if (result.running > 0) console.log(`[rslmc] ${result.running} Docker container server(s) are still running`);
+    } catch (error) {
+      console.error(`[rslmc] container reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  reconcileDockerOnce();
+
   setInterval(() => {
     try { reconcileForeignProcesses(); } catch { /* transient /proc or PowerShell failure */ }
   }, 15_000).unref?.();

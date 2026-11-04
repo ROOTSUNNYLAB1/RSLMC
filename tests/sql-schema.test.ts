@@ -117,8 +117,19 @@ describe("every INSERT compiles against the real schema", () => {
     expect(insert).toBeDefined();
     const values = /VALUES\s*\((.*)\)/i.exec(insert!.sql)?.[1] ?? "";
     const parts = values.split(",").map((p) => p.trim());
-    expect(parts.length).toBe(24);
-    expect(parts[parts.length - 1]).toBe("1"); // eula_accepted, a literal
-    expect(parts.filter((p) => p === "?").length).toBe(21);
+    const columns = /\(([^)]*)\)\s*VALUES/i.exec(insert!.sql)?.[1] ?? "";
+    const named = columns.split(",").map((c) => c.trim()).filter(Boolean);
+    /*
+     * Concrete counts, deliberately spelled out: this file exists because a column and a value drifted
+     * apart, and a count is what catches that. `runtime` and `docker_image` were the last two added.
+     */
+    expect(named.length).toBe(26);
+    expect(parts.length).toBe(26);
+    expect(parts.filter((p) => p === "?").length).toBe(23);   // 23 bound parameters
+    expect(parts.filter((p) => p !== "?").length).toBe(3);    // 'installing', '', 1
+    // eula_accepted is still a literal 1: the EULA is written by the create path, not by the request.
+    const eulaIndex = named.indexOf("eula_accepted");
+    expect(eulaIndex).toBeGreaterThan(-1);
+    expect(parts[eulaIndex]).toBe("1");
   });
 });

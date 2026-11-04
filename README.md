@@ -758,6 +758,39 @@ and the response carries a `warnings[]` entry explaining exactly what happened; 
 <img src="docs/screenshots/players-violet.png" alt="Players page" width="100%">
 
 
+### Two runtimes: standalone or Docker
+
+The creation wizard asks **how the server should run** before it asks anything else, because that
+decision changes what enforces the limits.
+
+| | Standalone (default) | Docker container |
+|---|---|---|
+| Process | the JVM, started and watched by the panel | the JVM inside a container, `-i` so the console and `stop` still work |
+| Memory / CPU limits | enforced only where the host supports cgroups v2 **and** the panel has the privileged helper | `--memory`, `--memory-swap` and `--cpus` on the container's own cgroup — kernel-enforced, no helper |
+| Disk | reported, warned on | `--storage-opt size=` **only when the daemon accepts it**; otherwise reported as a target |
+| Files | `<data>/servers/<uuid>` | the same directory, bind-mounted at `/data` |
+| Who runs it | this machine | the local daemon, or a remote node's daemon (the request is forwarded) |
+
+<img src="docs/screenshots/docker-runtime.png" alt="The runtime step in the creation wizard" width="100%">
+
+* **Java 8 – 25, from Pterodactyl's own images.** The panel asks GHCR which `pterodactyl/yolks:java_*`
+  tags really exist and uses one of those; a major with no published tag falls back to the same
+  Temurin JRE (`eclipse-temurin:<major>-jre`) instead of a reference that would fail at pull time.
+  Images can be pulled from the wizard ("Prepare image", streamed progress) or on first start.
+* **Everything else keeps working.** The container is a foreground child process, so the console,
+  stdin, the relay that survives a panel restart, crash-cause detection, backups, files, properties,
+  worlds, players, schedules and the marketplace all use the same code paths as a standalone server.
+  Usage is read from `docker stats` (the container's own accounting) rather than `/proc`, because the
+  JVM's parent inside a container is containerd's shim, not the CLI.
+* **Honest failures.** No daemon → the Docker card says why (`permission denied … add the user to the
+  docker group`, `daemon is not answering`, `CLI not found`) and the create call refuses with
+  `docker_unavailable` instead of storing a server that can never start. A kill goes through
+  `docker kill` + `rm -f`, because a pid-tree walk cannot reach a containerised JVM.
+* **Switch later.** Settings → Runtime moves a stopped server between the two runtimes without
+  touching its files.
+
+<img src="docs/screenshots/docker-server.png" alt="A running container server with real metrics" width="100%">
+
 ### Files, properties, players, worlds, plugins
 
 * **Files** — breadcrumb navigation, upload (multipart), mkdir, rename/move, copy, bulk delete,
@@ -1058,7 +1091,8 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (37 files, 361 tests)
+bun run test                          # every suite, one process per file (39 files, 408 tests)
+RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
 bun run typecheck                     # tsc --noEmit, strict

@@ -258,6 +258,47 @@ the *new* code — which turned out to be two bugs, not one.
 
 ---
 
+## 1i. Docker runtime (2026.11.05.1)
+
+A server can now run inside a Docker container instead of directly on the host. The threat model
+changes, so it is written down here rather than left to the code.
+
+**What gets stronger.** Memory and CPU limits stop depending on the host's cgroups and a privileged
+helper: `--memory`, `--memory-swap` and `--cpus` put the server in its own cgroup and the kernel
+enforces it. The old honest caveat — "partly enforced" — becomes "enforced by the container".
+
+**What the panel deliberately does not do**
+
+* **No Docker socket in the container.** The JVM gets `/data` and nothing else. It is not a sibling
+  container with the daemon socket mounted, so a compromised plugin cannot start a privileged
+  container as a stepping stone.
+* **No `--privileged`, no added capabilities, no host networking unless asked.** Host networking is an
+  operator choice (`RSLMC_DOCKER_NETWORK=host`), because Minecraft's UDP traffic and bridge-less
+  daemons need it; it is reported in the plan preview, not hidden.
+* **No image the operator did not choose.** Only the yolks/Temurin references the wizard lists are
+  pulled, and a reference is validated before it is passed to the CLI.
+* **Disk limits are not claimed when they cannot be enforced.** `--storage-opt size=` requires a
+  storage driver that supports quotas (btrfs/zfs/devicemapper, or overlay2 on a project-quota
+  filesystem). The daemon is asked; when it cannot, the panel says "measured, not capped" — the same
+  rule the panel already follows for standalone servers.
+
+**New failure modes, and what the panel does about them**
+
+| Failure | Behaviour |
+|---|---|
+| No daemon / socket permission denied | `docker info` exits 0 with an empty document and `ServerErrors`; the probe reads that and reports the daemon's own message. Create refuses with `docker_unavailable`; the wizard disables the option |
+| Image missing at start | pulled first, progress streamed into the console; a failed pull is `502 image_pull_failed` with the CLI's message |
+| Leftover container from a crash | removed before `docker run` so the name is reusable; a container still running from a previous panel session is adopted and shown as `recovering` |
+| `docker stats` on a stopped container | returns nulls, so no metrics are published — the last sample is never presented as live |
+| Kill | `docker kill` + `docker rm -f`, with a bounded wait for removal; a pid-tree walk cannot reach a containerised JVM |
+| Deleted server | its container is removed with it, so the port and the name are freed |
+
+**Tests.** `tests/docker.test.ts` asserts the real command line (memory, swap, cpus, bind mount, path
+translation, quota only when supported, reference validation). `tests/docker-live.test.ts` starts a
+real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the daemon.
+
+---
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |
@@ -323,7 +364,7 @@ the *new* code — which turned out to be two bugs, not one.
 ```bash
 cd rslmc
 bun install
-bun test                              # 361 unit/integration tests (37 files)
+bun test                              # 408 unit/integration tests (39 files)
 bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```

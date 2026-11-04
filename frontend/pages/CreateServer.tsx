@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Cpu, Download, Globe2, HardDrive, MemoryStick, Package, Rocket, Server, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, Boxes, Check, Cpu, Download, Globe2, HardDrive, MemoryStick, Package, Rocket, Server, ShieldAlert } from "lucide-react";
 import type { ServerSoftwareId, SoftwareDefinition } from "../../src/shared/types";
 import { heapMbFor, overheadMbFor, initialHeapMbFor, allocationAdvice } from "../../src/shared/memory";
 import { Banner, Button, Card, Field, Input, PageHeader, Pill, Select, Toggle } from "../components/ui";
@@ -7,16 +7,19 @@ import { api, errorMessage } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 import { useRouter } from "../lib/router";
 import { cpuAllocationLabel } from "../lib/format";
+import { RuntimePicker, type RuntimeChoice } from "../components/runtime-picker";
 
 interface VersionInfo { id: string; type: string; javaMajor: number }
 interface NodeInfo { id: number; name: string; isLocal: boolean; online: boolean; maintenance: boolean }
 
 const STEPS = [
   { id: 1, label: "Basics", icon: <Server size={13} /> },
-  { id: 2, label: "Software", icon: <Package size={13} /> },
-  { id: 3, label: "Networking", icon: <Globe2 size={13} /> },
-  { id: 4, label: "Resources", icon: <Cpu size={13} /> },
-  { id: 5, label: "Review", icon: <Rocket size={13} /> },
+  // How the server runs is asked before the software, because it decides what will start it.
+  { id: 2, label: "Runtime", icon: <Boxes size={13} /> },
+  { id: 3, label: "Software", icon: <Package size={13} /> },
+  { id: 4, label: "Networking", icon: <Globe2 size={13} /> },
+  { id: 5, label: "Resources", icon: <Cpu size={13} /> },
+  { id: 6, label: "Review", icon: <Rocket size={13} /> },
 ];
 
 export function CreateServerPage() {
@@ -42,6 +45,9 @@ export function CreateServerPage() {
     publicHost: "", publicPort: "",
     memoryMb: 2048, cpuPercent: 100, diskMb: 10240,   // CPU default widens to all host cores on load
     jvmArgs: "", serverArgs: "nogui", autoStart: false, crashRecovery: true, acceptEula: false,
+    // `docker` is offered by the wizard only when a daemon answers; the server-side create call refuses
+    // it either way, so a stale browser cannot invent a container on a machine without Docker.
+    runtime: "standalone" as RuntimeChoice, dockerImage: "",
   });
 
   // Declared *after* `form`: reading `form` above the useState call is a temporal-dead-zone error
@@ -131,6 +137,8 @@ export function CreateServerPage() {
         autoStart: form.autoStart,
         crashRecovery: form.crashRecovery,
         acceptEula: form.acceptEula,
+        runtime: form.runtime,
+        ...(form.runtime === "docker" && form.dockerImage ? { dockerImage: form.dockerImage } : {}),
       });
       setInstallInfo({ id: result.installId, label: "Queued — downloading Java runtime and server software", progress: 0, total: 0, done: false });
       toast.success("Server created", "Installation started in the background.");
@@ -204,7 +212,23 @@ export function CreateServerPage() {
         </Card>
       ) : null}
 
+      {/* Runtime: standalone JVM or a Docker container. */}
       {step === 2 ? (
+        <Card title="How should this server run?" icon={<Boxes size={12} />}>
+          <RuntimePicker
+            value={form.runtime}
+            onChange={(runtime) => setForm({ ...form, runtime })}
+            image={form.dockerImage}
+            onImage={(reference) => setForm((current) => ({ ...current, dockerImage: reference }))}
+            javaMajor={form.javaMajor || 21}
+            memoryMb={Number(form.memoryMb) || 0}
+            cpuPercent={Number(form.cpuPercent) || 100}
+            diskMb={Number(form.diskMb) || 0}
+          />
+        </Card>
+      ) : null}
+
+      {step === 3 ? (
         <Card
           title="Server software"
           icon={<Package size={12} />}
@@ -276,7 +300,7 @@ export function CreateServerPage() {
         </Card>
       ) : null}
 
-      {step === 3 ? (
+      {step === 4 ? (
         <Card title="Networking" icon={<Globe2 size={12} />}>
           <div className="form-grid">
             <Field label="Bind address" hint="0.0.0.0 listens on every interface. 127.0.0.1 is only reachable from this machine.">
@@ -310,7 +334,7 @@ export function CreateServerPage() {
         </Card>
       ) : null}
 
-      {step === 4 ? (
+      {step === 5 ? (
         <Card title="Resources" icon={<Cpu size={12} />}>
           <div className="form-grid">
             <Field label="Memory" hint={`Hard cap for the whole process, minimum 128 MB. The Java heap grows up to ${heapMbFor(Number(form.memoryMb) || 0)} MB, starts at ${initialHeapMbFor(Number(form.memoryMb) || 0)} MB, and ${overheadMbFor(Number(form.memoryMb) || 0)} MB is kept for JVM runtime overhead.${allocationAdvice(Number(form.memoryMb) || 0) ? ` ${allocationAdvice(Number(form.memoryMb) || 0)}` : ""}`}>
@@ -342,13 +366,27 @@ export function CreateServerPage() {
         </Card>
       ) : null}
 
-      {step === 5 ? (
+      {step === 6 ? (
         <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}>
           <Card title="Review" icon={<Check size={12} />} bodyClass="tight">
             <div className="info-list">
               <div className="info-row"><span className="k">Name</span><span className="v">{form.name || "—"}</span></div>
               <div className="info-row"><span className="k">Software</span><span className="v">{selectedSoftware?.name} {form.mcVersion}</span></div>
-              <div className="info-row"><span className="k">Java</span><span className="v">Temurin {form.javaMajor}</span></div>
+              <div className="info-row">
+                <span className="k">Runtime</span>
+                <span className="v">{form.runtime === "docker" ? "Docker container" : "Standalone JVM"}</span>
+              </div>
+              {form.runtime === "docker" ? (
+                <>
+                  <div className="info-row"><span className="k">Image</span><span className="v mono text-xs">{form.dockerImage || `Java ${form.javaMajor}`}</span></div>
+                  <div className="info-row">
+                    <span className="k">Limits</span>
+                    <span className="v">{form.memoryMb} MB · {(Math.max(10, Number(form.cpuPercent)) / 100).toFixed(2)} cores, enforced by the container</span>
+                  </div>
+                </>
+              ) : (
+                <div className="info-row"><span className="k">Java</span><span className="v">Temurin {form.javaMajor}</span></div>
+              )}
               <div className="info-row"><span className="k">Node</span><span className="v">{nodes.find((node) => node.id === form.nodeId)?.name ?? "—"}</span></div>
               <div className="info-row"><span className="k">Address</span><span className="v mono">{form.bindIp}:{form.port}</span></div>
               <div className="info-row"><span className="k">Memory</span><span className="v">{form.memoryMb} MB</span></div>
@@ -398,7 +436,7 @@ export function CreateServerPage() {
       <div className="row" style={{ marginTop: 16, gap: 8 }}>
         <Button icon={<ArrowLeft size={14} />} onClick={() => setStep(Math.max(1, step - 1))} disabled={step === 1}>Back</Button>
         <span className="spacer" />
-        {step < 5 ? (
+        {step < 6 ? (
           <Button variant="primary" onClick={() => setStep(step + 1)} disabled={step === 1 && form.name.trim().length < 2}>
             Continue <ArrowRight size={14} />
           </Button>
@@ -408,7 +446,7 @@ export function CreateServerPage() {
           </Button>
         )}
       </div>
-      {step === 5 && !form.acceptEula ? <div className="text-xs faint" style={{ marginTop: 8 }}>Accept the EULA to enable server creation.</div> : null}
+      {step === 6 && !form.acceptEula ? <div className="text-xs faint" style={{ marginTop: 8 }}>Accept the EULA to enable server creation.</div> : null}
     </>
   );
 }

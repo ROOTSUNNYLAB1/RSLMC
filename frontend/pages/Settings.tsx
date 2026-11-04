@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { heapMbFor, overheadMbFor, initialHeapMbFor, allocationAdvice } from "../../src/shared/memory";
-import { AlertTriangle, Cog, Cpu, Download, KeyRound, MemoryStick, Save, Server, ShieldAlert, Trash2 } from "lucide-react";
+import { AlertTriangle, Boxes, Cog, Cpu, Download, KeyRound, MemoryStick, Save, Server, ShieldAlert, Trash2 } from "lucide-react";
 import type { ServerSummary } from "../../src/shared/types";
 import { Banner, Button, Card, ConfirmDialog, Field, Input, Loading, PageHeader, Pill, Select, Textarea, Toggle } from "../components/ui";
-import { api } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 import { useRouter } from "../lib/router";
 import { cpuAllocationLabel, formatDateTime } from "../lib/format";
@@ -251,6 +251,19 @@ export function SettingsPage({ server }: { server: ServerSummary }) {
               <div className="code-block">{data.raw.startupCommand}</div>
             </Field>
           </div>
+        </Card>
+
+        {/*
+          Runtime switch: the same files, a different way of running them. Disabled while the server is
+          running, because changing the launch method under a live process would leave the panel
+          tracking a JVM it can no longer stop.
+        */}
+        <Card title="Runtime" icon={<Boxes size={12} />}>
+          <RuntimeSwitch
+            server={server}
+            running={server.status !== "offline" && server.status !== "error" && server.status !== "crashed"}
+            onChanged={() => void load()}
+          />
         </Card>
 
         <Card title="Danger zone" icon={<AlertTriangle size={12} />}>
@@ -552,5 +565,84 @@ export function DatabasesPage({ server }: { server: ServerSummary }) {
         </div>
       </Card>
     </>
+  );
+}
+
+/*
+ * Switching how a running server runs.
+ *
+ * Both runtimes use the same directory — a container bind-mounts it at /data — so this moves nothing
+ * and downloads nothing. It is refused while the server is running, and refused when Docker is not
+ * usable, with the daemon's own words as the reason.
+ */
+function RuntimeSwitch({ server, running, onChanged }: { server: ServerSummary; running: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [docker, setDocker] = useState<{ available: boolean; version: string | null; reason: string | null; diskQuota: boolean } | null>(null);
+
+  useEffect(() => {
+    api.get<{ docker: { available: boolean; version: string | null; reason: string | null; diskQuota: boolean } }>("/api/panel/docker")
+      .then((result) => setDocker(result.docker))
+      .catch(() => setDocker(null));
+  }, []);
+
+  const change = async (runtime: "standalone" | "docker") => {
+    if (runtime === server.runtime) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/servers/${server.id}/runtime`, { runtime });
+      toast.success("Runtime changed", runtime === "docker"
+        ? "The next start will run this server in a container."
+        : "The next start will run this server as a plain JVM.");
+      onChanged();
+    } catch (error) {
+      toast.error("Could not change the runtime", errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="stack">
+      <div className="row" style={{ gap: 8 }}>
+        <Button
+          variant={server.runtime === "standalone" ? "primary" : "default"}
+          loading={busy}
+          disabled={running || server.runtime === "standalone"}
+          onClick={() => void change("standalone")}
+        >
+          Standalone JVM
+        </Button>
+        <Button
+          variant={server.runtime === "docker" ? "primary" : "default"}
+          loading={busy}
+          disabled={running || server.runtime === "docker" || docker?.available === false}
+          onClick={() => void change("docker")}
+        >
+          Docker container
+        </Button>
+        <span className="spacer" />
+        <span className="text-xs faint">
+          {running ? "Stop the server to change this." : docker?.available === false ? "Docker is not available on this machine." : "Applies to the next start."}
+        </span>
+      </div>
+      <div className="info-list">
+        <div className="info-row"><span className="k">Current runtime</span><span className="v">{server.runtime === "docker" ? "Docker container" : "Standalone JVM"}</span></div>
+        {server.runtime === "docker" ? (
+          <>
+            <div className="info-row"><span className="k">Image</span><span className="v mono text-xs">{server.dockerImage}</span></div>
+            <div className="info-row"><span className="k">Container</span><span className="v mono text-xs">{server.containerName}</span></div>
+            <div className="info-row">
+              <span className="k">Enforced limits</span>
+              <span className="v">
+                {server.memoryMb} MB memory · {(Math.max(10, server.cpuPercent) / 100).toFixed(2)} CPU cores
+                {docker?.diskQuota ? " · disk quota" : " · disk measured, not capped"}
+              </span>
+            </div>
+          </>
+        ) : null}
+      </div>
+      {docker?.reason ? <Banner tone="warning" title="Docker">{docker.reason}</Banner> : null}
+    </div>
   );
 }

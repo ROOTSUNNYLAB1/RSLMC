@@ -6,6 +6,8 @@ import { hostStats, diskUsage } from "../resources/host";
 import { describeEnforcement } from "../resources/enforcement";
 import { detectCgroups } from "../resources/cgroups";
 import { describeRoutes } from "./index";
+import { listImages, listPanelContainers, probeDocker, pullImage } from "../runtime/docker";
+import { describeImages, imageForMajor, yolksJavaTags } from "../runtime/images";
 import { recordActivity } from "../services/audit";
 import {
   checkForUpdates, dismissUpdate, getSettings, saveSettings, snapshot, type UpdateSnapshot,
@@ -190,6 +192,53 @@ export function registerPanelRoutes(router: Router): void {
       void refreshRepositoryInfo();
     }
     return json(aboutPayload(ctx.user));
+  });
+
+  /* --- Docker runtime ---------------------------------------------------
+   *
+   * The wizard has to know, before it offers the choice, whether this machine can actually run a
+   * container. The probe answers with the daemon's own words: version, storage driver, cgroup version,
+   * whether a per-container disk quota is enforceable, and — when something is missing — the reason.
+   */
+  router.get("/api/panel/docker", async () => {
+    const info = probeDocker(true);
+    const images = info.available ? listImages() : [];
+    return json({
+      docker: info,
+      images: images.filter((image) => image.reference.includes("yolks") || image.reference.includes("temurin")),
+      containers: info.available ? listPanelContainers() : [],
+    });
+  });
+
+  /** The Java image list, with the registry's real tags and what is already on this machine. */
+  router.get("/api/panel/docker/images", async () => {
+    const info = probeDocker();
+    const images = await describeImages();
+    return json({
+      available: info.available,
+      reason: info.reason,
+      majors: images,
+      defaultMajor: 21,
+    });
+  });
+
+  /** Prepare an image before it is needed. Same pull the start path uses, with progress in the log. */
+  router.post("/api/panel/docker/pull", async (ctx) => {
+    requirePermission(ctx.user, "server.create");
+    const body = await ctx.body<{ reference?: string; major?: number }>();
+    const info = probeDocker();
+    if (!info.available) {
+      throw new ApiException(409, "docker_unavailable", info.reason ?? "Docker is not answering.");
+    }
+    const reference = body.reference?.trim()
+      || (body.major ? imageForMajor(Number(body.major), await yolksJavaTags()).reference : null);
+    if (!reference) throw new ApiException(400, "missing_reference", "Give an image reference or a Java major.");
+    if (!/^[a-z0-9._/-]+(:[a-z0-9._-]+)?$/i.test(reference)) {
+      throw new ApiException(400, "invalid_reference", "That does not look like a Docker image reference.");
+    }
+    const result = await pullImage(reference);
+    if (!result.ok) throw new ApiException(502, "image_pull_failed", `Could not pull ${reference}: ${result.message}`);
+    return json({ ok: true, reference, message: result.message });
   });
 
   router.post("/api/panel/about/refresh", async (ctx) => {

@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, extname, sep, resolve } from "node:path";
 import { requireServerAccess, requirePermission, hasPermission } from "../auth";
 import {
-  listServersForUser, getServer, createServer, deleteServer, updateServerSettings, reinstallServer,
+  listServersForUser, getServer, createServer, deleteServer, updateServerSettings, updateServerRuntime, reinstallServer,
   serverMetricsHistory, currentServerMetrics, acceptEula,
 } from "../services/servers";
 import {
@@ -125,6 +125,13 @@ export function registerServerRoutes(api: Router): void {
         // Only a controller may stage a server without running the installer straight away (used by
         // the multi-node test suite and by a controller that configures before installing).
         install: v.boolean({ optional: true }),
+        /*
+         * How the server should run. `standalone` starts a JVM directly; `docker` runs it in a
+         * container, where memory and CPU are enforced by that container's own cgroup. Refused with
+         * `docker_unavailable` when no daemon answers — see services/servers.ts.
+         */
+        runtime: v.oneOf(["standalone", "docker"] as const, { optional: true }),
+        dockerImage: v.string({ max: 200, optional: true }),
       },
       body,
     );
@@ -159,6 +166,8 @@ export function registerServerRoutes(api: Router): void {
         autoStart: input.autoStart ?? false,
         crashRecovery: input.crashRecovery ?? false,
         acceptEula: input.acceptEula!,
+        runtime: input.runtime ?? "standalone",
+        dockerImage: input.dockerImage ?? null,
         install: ctx.user!.id === 0 ? input.install : undefined,
       },
       ctx.user!.username,
@@ -261,6 +270,31 @@ export function registerServerRoutes(api: Router): void {
       default: throw badRequest("Action must be start, stop, restart or kill");
     }
     return json({ ok: true, status: runtimeState(id).status });
+  });
+
+  /* ---------------- Runtime ---------------- */
+
+  /*
+   * Switch between a panel-started JVM and a container. Files stay where they are — a container
+   * bind-mounts the same directory — so this is a real migration of *how* the server runs, not a
+   * reinstall. Refused while the server is running, and refused when Docker is not usable.
+   */
+  api.patch("/api/servers/:id/runtime", async (ctx) => {
+    const id = requireServer(ctx, "server.settings");
+    const body = validate(
+      {
+        runtime: v.oneOf(["standalone", "docker"] as const),
+        dockerImage: v.string({ max: 200, optional: true }),
+      },
+      await ctx.body(),
+    );
+    if (!body.runtime) throw badRequest("Choose a runtime: standalone or docker.");
+    const server = updateServerRuntime(
+      id,
+      { runtime: body.runtime, dockerImage: body.dockerImage ?? null },
+      ctx.user?.username ?? "system",
+    );
+    return json({ server });
   });
 
   /* ---------------- Latency ---------------- */

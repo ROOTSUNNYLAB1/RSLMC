@@ -21,6 +21,8 @@ import { softwareDefinition, minimumJavaFor } from "../minecraft/providers";
 import { normalizeBindIp, isValidPort, isTcpPortFree } from "./net";
 import { ensureRuntime, resolveExecutable, runtimeInfo } from "../java/manager";
 import { notify } from "./notifications";
+import { containerNameFor, probeDocker, removeContainer } from "../runtime/docker";
+import { imageForMajor, yolksJavaTags } from "../runtime/images";
 import type { ServerSummary, ServerStatus, UserPublic } from "../shared/types";
 
 export function mapServer(row: any): ServerSummary {
@@ -61,6 +63,10 @@ export function mapServer(row: any): ServerSummary {
     nodeName: node?.name,
     ownerId: row.owner_id,
     ownerName: owner?.username,
+    runtime: (row.runtime ?? "standalone") as "standalone" | "docker",
+    dockerImage: row.docker_image ?? null,
+    containerName: row.runtime === "docker" ? `rslmc-${row.uuid}` : null,
+    dockerDiskQuota: Boolean(row.docker_disk_quota),
     memoryMb: row.memory_mb,
     cpuPercent: row.cpu_percent,
     diskMb: row.disk_mb,
@@ -342,6 +348,10 @@ export interface CreateServerInput {
   acceptEula: boolean;
   icon?: string;
   install?: boolean;
+  /** `standalone` (a JVM the panel starts) or `docker` (a container). */
+  runtime?: "standalone" | "docker";
+  /** Java image to run in the container; resolved from the major when omitted. */
+  dockerImage?: string | null;
 }
 
 /**
@@ -464,19 +474,38 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
   const uuid = randomUUID();
   const enforcement = describeEnforcement();
 
+  /*
+   * Runtime choice. Docker is only accepted when a daemon actually answers, and the refusal names the
+   * reason — offering a container server on a machine without Docker produces a record that can never
+   * start, which is worse than saying no at the point of creation.
+   */
+  const runtime: "standalone" | "docker" = input.runtime === "docker" ? "docker" : "standalone";
+  let dockerImage: string | null = null;
+  if (runtime === "docker") {
+    const docker = probeDocker();
+    if (!docker.available) {
+      throw new ApiException(409, "docker_unavailable",
+        `This server was requested as a Docker container, but Docker is not usable here: ${docker.reason ?? "the daemon is not answering"}.`);
+    }
+    // Resolve against the registry's live tag list, so a yolks image is preferred when it exists and
+    // the Temurin fallback is only used when it does not.
+    dockerImage = input.dockerImage?.trim() || imageForMajor(javaMajor, await yolksJavaTags()).reference;
+  }
+
   // The server row and its allocation are written together: a failure here must not leave a
   // half-created server behind (that is what produced "duplicate" servers in earlier builds).
   const serverId = transaction(() => {
     const id = insert(
       `INSERT INTO servers (uuid, name, description, icon, owner_id, node_id, software, software_version, mc_version,
         java_major, status, memory_mb, cpu_percent, disk_mb, bind_ip, port, public_host, public_port,
-        jvm_args, server_args, auto_start, crash_recovery, enforcement, eula_accepted)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        jvm_args, server_args, auto_start, crash_recovery, enforcement, eula_accepted, runtime, docker_image)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       [
         uuid, input.name, input.description ?? null, input.icon ?? null, input.ownerId, input.nodeId,
         input.software, input.mcVersion, javaMajor, input.memoryMb, input.cpuPercent, input.diskMb,
         bindIp, input.port, publicHost, publicPort, jvmArgs, input.serverArgs ?? "nogui",
         input.autoStart ? 1 : 0, input.crashRecovery ? 1 : 0, JSON.stringify(enforcement),
+        runtime, dockerImage,
       ],
     );
     reserveAllocation(input.nodeId, bindIp, input.port, id, `Primary allocation for ${input.name}`);
@@ -745,6 +774,22 @@ export async function deleteServer(serverId: number, actor: string, opts: { dele
     return;
   }
   if (isRunning(serverId)) throw new ApiException(409, "server_running", "Stop the server before deleting it");
+
+  /*
+   * A container outlives the row unless it is removed here, and then the port stays bound and the name
+   * stays taken — the next server with that uuid cannot start, and `docker ps` is full of ghosts. The
+   * name is derived from the uuid, so it is known even after the row is gone.
+   */
+  if (row.runtime === "docker") {
+    const removed = removeContainer(containerNameFor(row.uuid));
+    if (!removed.ok) {
+      recordActivity({
+        type: "server.container_cleanup_failed", serverId: null, target: row.name, actorName: actor,
+        result: "failure", metadata: { message: removed.message },
+      });
+    }
+  }
+
   run("DELETE FROM servers WHERE id = ?", [serverId]);
   // Free the port: without this the allocation row kept the port reserved forever and the
   // next server on that port failed with a UNIQUE constraint error.
@@ -785,6 +830,44 @@ export function pruneGhostServers(): number {
 /** Heap-sizing flags that would overrule the panel's own `-Xmx` (they come later on the command line). */
 const HEAP_OVERRIDE_PATTERN =
   /-XX:(?:MaxHeapSize|InitialHeapSize|MaxRAMPercentage|InitialRAMPercentage|MinRAMPercentage|MaxRAM|SoftMaxHeapSize)\b/i;
+
+/**
+ * Switches a server between standalone and Docker without touching its files.
+ *
+ * The files are the same either way (a container bind-mounts the server directory), so the switch is a
+ * column and nothing else — but only while nothing is running: changing the launch method under a live
+ * process would leave the panel tracking a JVM it can no longer stop.
+ */
+export function updateServerRuntime(
+  serverId: number,
+  input: { runtime: "standalone" | "docker"; dockerImage?: string | null },
+  actor: string,
+): ServerSummary {
+  const row = queryOne<any>("SELECT * FROM servers WHERE id = ?", [serverId]);
+  if (!row) throw new ApiException(404, "server_not_found", "Server not found");
+  if (isRunning(serverId)) {
+    throw new ApiException(409, "server_running", "Stop the server before changing how it runs.");
+  }
+  if (input.runtime === "docker") {
+    const docker = probeDocker();
+    if (!docker.available) {
+      throw new ApiException(409, "docker_unavailable",
+        `Docker is not usable on this machine: ${docker.reason ?? "the daemon is not answering"}.`);
+    }
+  }
+  const image = input.runtime === "docker"
+    ? (input.dockerImage?.trim() || imageForMajor(Number(row.java_major), new Set()).reference)
+    : null;
+  run(
+    "UPDATE servers SET runtime = ?, docker_image = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+    [input.runtime, image, serverId],
+  );
+  recordActivity({
+    type: "server.runtime_changed", serverId, target: row.name, actorName: actor,
+    metadata: { runtime: input.runtime, image },
+  });
+  return getServer(serverId);
+}
 
 export function updateServerSettings(
   serverId: number, patch: Record<string, unknown>, actor: string,

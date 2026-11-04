@@ -399,6 +399,17 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
                 ...(server.publicHost
                   ? [{ key: "Internal", value: <span className="mono faint text-xs">{server.internalAddress ?? `${server.bindIp}:${server.port}`}</span> }]
                   : []),
+                {
+                  key: "Runtime",
+                  value: server.runtime === "docker" ? (
+                    <span className="row-gap">
+                      <span className="runtime-chip docker" title={server.dockerImage ?? undefined}>Docker</span>
+                      <span className="mono faint text-xs">{server.dockerImage}</span>
+                    </span>
+                  ) : (
+                    <span className="runtime-chip">Standalone</span>
+                  ),
+                },
                 { key: "Software", value: server.software.charAt(0).toUpperCase() + server.software.slice(1) },
                 { key: "Version", value: server.mcVersion },
                 { key: "Java", value: detail.java ? `${detail.java.vendor ?? "Temurin"} ${detail.java.major} (${detail.java.version})` : `Java ${server.javaMajor} (installed on start)` },

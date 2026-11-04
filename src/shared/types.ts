@@ -118,6 +118,14 @@ export interface ServerSummary {
   mcVersion: string;
   nodeId: number;
   nodeName?: string;
+  /** How this server runs: a JVM the panel starts, or a Docker container. */
+  runtime: "standalone" | "docker";
+  /** The image used when `runtime` is `docker`, e.g. `ghcr.io/pterodactyl/yolks:java_21`. */
+  dockerImage: string | null;
+  /** The container name (`rslmc-<uuid>`), null for standalone servers. */
+  containerName: string | null;
+  /** True when the daemon accepted a per-container disk quota for this server. */
+  dockerDiskQuota: boolean;
   ownerId: number;
   ownerName?: string;
   memoryMb: number;

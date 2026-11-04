@@ -10,6 +10,11 @@ import { writeFileAtomic } from "../services/download";
 import { installServerSoftware, softwareDefinition } from "../minecraft/providers";
 import { ensureRuntime, resolveExecutable, runtimeInfo, runtimeIsUsable } from "../java/manager";
 import { applyLimits, attachProcess, detectCgroups, killCgroup, readUsage, removeCgroup, resolveMemoryUsage } from "../resources/cgroups";
+import {
+  containerNameFor, containerStatsAsync, dockerBin, imagePresent, inspectContainer, killContainer,
+  probeDocker, pullImage, removeContainer,
+} from "../runtime/docker";
+import { imageForMajor } from "../runtime/images";
 import { sampleProcess, peekProcess } from "../resources/process-stats";
 import { directorySizeSync } from "../resources/host";
 import { freemem } from "node:os";
@@ -61,6 +66,10 @@ interface ManagedProcess {
   pendingLines: ConsoleLine[];
   flushTimer?: ReturnType<typeof setTimeout>;
   lastCpu: number;
+  /** Container readings, cached between `docker stats` spawns (see currentMetrics). */
+  lastDockerRead?: number;
+  lastDockerMem?: number;
+  lastDockerRunning?: boolean;
 }
 
 const managed = new Map<number, ManagedProcess>();
@@ -70,6 +79,10 @@ const managed = new Map<number, ManagedProcess>();
 /* ------------------------------------------------------------------ */
 
 interface ServerRow {
+  /** `standalone` (panel-started JVM) or `docker` (container). */
+  runtime?: "standalone" | "docker" | null;
+  docker_image?: string | null;
+  docker_disk_quota?: number | null;
   id: number;
   uuid: string;
   name: string;
@@ -343,6 +356,8 @@ export interface LaunchPlan {
   cwd: string;
   shellScript: string | null;
   preview: string;
+  /** Set when the plan runs inside Docker: the container name and the image it is built from. */
+  docker?: { container: string; image: string; network: string } | null;
 }
 
 /**
@@ -398,21 +413,105 @@ export function buildLaunchPlan(server: ServerRow): LaunchPlan {
     jar = preferred ?? null;
   }
 
+  const heapFlags = [`-Xms${initialMemoryMb}M`, `-Xmx${memoryMb}M`];
   const command = [
     javaExe,
-    `-Xms${initialMemoryMb}M`,
-    `-Xmx${memoryMb}M`,
+    ...heapFlags,
     ...jvmArgs,
     // Absolute path: on Windows the command line is the only way to map a JVM back to a server.
     ...(jar ? ["-jar", join(directory, jar)] : []),
     ...serverArgs,
   ];
+
+  if (server.runtime === "docker") {
+    return buildDockerPlan({
+      server, directory, jar, jvmArgs, serverArgs, heapFlags,
+    });
+  }
+
   return {
     command,
     cwd: directory,
     shellScript: null,
     preview: command.join(" "),
   };
+}
+
+/**
+ * The container launch plan.
+ *
+ * The shape is deliberate: `docker run` stays in the foreground with `-i`, so from the manager's point
+ * of view a container server is exactly like a JVM — a child process with stdout, stdin and an exit
+ * code. Console capture, `stop` over stdin, the relay that survives a panel restart and the crash-cause
+ * reader all keep working without a second implementation.
+ *
+ * What is *not* shared is the path translation: the server directory is bind-mounted at `/data`, so
+ * only `/data`-relative paths can appear inside the JVM command line.
+ *
+ * Limits are the reason to offer Docker at all: `--memory` and `--cpus` are enforced by the container's
+ * own cgroup, with no privileged helper and no dependency on the host's cgroup layout. `--storage-opt
+ * size=` is added only when the daemon accepts it (see `probeDocker().diskQuota`), and the panel says
+ * plainly when it does not.
+ */
+function buildDockerPlan(input: {
+  server: ServerRow;
+  directory: string;
+  jar: string | null;
+  jvmArgs: string[];
+  serverArgs: string[];
+  heapFlags: string[];
+}): LaunchPlan {
+  const { server, directory, jar, jvmArgs, serverArgs, heapFlags } = input;
+  const container = containerNameFor(server.uuid);
+  const image = server.docker_image?.trim() || imageForMajor(server.java_major, new Set()).reference;
+  const network = process.env.RSLMC_DOCKER_NETWORK?.trim() || "bridge";
+
+  /*
+   * The base JDK brings its own user; the server files on the host belong to whoever runs the panel.
+   * Without this the JVM cannot write `logs/` or even read the jar on a hardened host. It is the same
+   * uid mapping Pterodactyl calls "container user", expressed the way plain `docker run` needs it.
+   */
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const gid = typeof process.getgid === "function" ? process.getgid() : null;
+
+  const args: string[] = [dockerBin(), "run", "--rm", "-i", "--init", "--name", container];
+
+  // Real, kernel-enforced limits.
+  const memoryMb = heapMbFor(server.memory_mb);
+  args.push("--memory", `${server.memory_mb}m`);
+  // Give the JVM headroom for metaspace/stacks inside the same budget: the container limit is the
+  // allocation, the heap is what the JVM is told to use.
+  args.push("--memory-swap", `${server.memory_mb}m`);
+  args.push("--cpus", (Math.max(10, server.cpu_percent) / 100).toFixed(2));
+  const quotaMb = server.disk_mb ?? 0;
+  if (quotaMb > 0 && server.docker_disk_quota) {
+    args.push("--storage-opt", `size=${quotaMb}m`);
+  }
+
+  if (uid !== null && gid !== null) args.push("--user", `${uid}:${gid}`);
+  args.push("--label", "rslmc.server=1");
+  args.push("-v", `${directory}:/data`);
+  args.push("-w", "/data");
+  if (network === "host") {
+    // Host networking is the reliable choice for Minecraft's UDP traffic and for a daemon whose
+    // bridge is disabled; the port is then reached exactly as on a standalone server.
+    args.push("--network", "host");
+  } else {
+    args.push("-p", `${server.port}:${server.port}/tcp`, "-p", `${server.port}:${server.port}/udp`);
+  }
+  if (server.rcon_password) args.push("-e", `RSLMC_RCON_PASSWORD=${server.rcon_password}`);
+  args.push("-e", `RSLMC_SERVER_ID=${server.id}`);
+  args.push("-e", "TERM=xterm-256color");
+  args.push("--entrypoint", "java", image);
+
+  const inner: string[] = [...heapFlags, ...jvmArgs];
+  if (jar) inner.push("-jar", `/data/${jar}`);
+  inner.push(...serverArgs);
+
+  const command = [...args, ...inner];
+  const preview = `docker run ${container} → ${image} | memory ${server.memory_mb} MB · cpus ${(Math.max(10, server.cpu_percent) / 100).toFixed(2)} | ${inner.join(" ")}`;
+  void memoryMb;
+  return { command, cwd: directory, shellScript: null, preview, docker: { container, image, network } };
 }
 
 function prepareJvmArgsFile(server: ServerRow, directory: string): void {
@@ -515,6 +614,35 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
     entry.diskBytes = directorySizeSync(directory);
     entry.lastDiskSample = Date.now();
 
+    /*
+     * Docker servers need their image on the machine before `docker run` can work, and a first start
+     * is exactly when it is missing. Pull it here, with progress in the console, instead of starting a
+     * container that fails instantly with "Unable to find image … locally".
+     */
+    if (server.runtime === "docker") {
+      const docker = probeDocker();
+      if (!docker.available) {
+        throw new ApiException(409, "docker_unavailable",
+          `This server runs in Docker, but Docker is not usable right now: ${docker.reason ?? "the daemon is not answering"}.`);
+      }
+      const image = server.docker_image?.trim() || imageForMajor(server.java_major, new Set()).reference;
+      if (!imagePresent(image)) {
+        systemLine(serverId, `Pulling ${image} — this only happens once per machine.`);
+        const pulled = await pullImage(image, (line: string) => systemLine(serverId, `pull: ${line}`));
+        if (!pulled.ok) {
+          setStatus(serverId, "error");
+          const message = `Could not pull ${image}: ${pulled.message}`;
+          entry.state.lastError = message;
+          systemLine(serverId, message);
+          throw new ApiException(502, "image_pull_failed", message);
+        }
+        systemLine(serverId, `${image} is ready.`);
+      }
+      // A container with this name from an earlier crash would block `docker run`: clear it first.
+      const stale = inspectContainer(containerNameFor(server.uuid));
+      if (stale.exists && !stale.running) removeContainer(containerNameFor(server.uuid));
+    }
+
     const plan = buildLaunchPlan(server);
     prepareJvmArgsFile(server, directory);
     systemLine(serverId, `Starting ${softwareDefinition(server.software as any).name} ${server.mc_version} on ${server.bind_ip}:${server.port}`);
@@ -539,10 +667,18 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
       );
     }
 
-    // Apply kernel-level limits before handing over the process.
+    /*
+     * Kernel-level limits. A container carries its own cgroup, so `--memory` / `--cpus` are enforced by
+     * the kernel without the host helper — that is the whole point of the Docker runtime, and it is
+     * reported as such rather than borrowing the standalone wording.
+     */
     const capabilities = detectCgroups();
     let enforcementMessage: string | null = null;
-    if (capabilities.privileged) {
+    if (plan.docker) {
+      const quota = server.docker_disk_quota ? "disk quota enforced by the storage driver" : "disk usage is reported but not capped (this storage driver cannot enforce it)";
+      enforcementMessage = `Docker container limits: memory ${server.memory_mb} MB, CPU ${(Math.max(10, server.cpu_percent) / 100).toFixed(2)} cores — kernel-enforced; ${quota}.`;
+      systemLine(serverId, enforcementMessage);
+    } else if (capabilities.privileged) {
       const limits = applyLimits({
         serverId,
         memoryBytes: server.memory_mb * 1024 * 1024,
@@ -839,6 +975,41 @@ async function forceKill(serverId: number, actor: string): Promise<void> {
   if (!entry) return;
   if (entry.stopTimer) { clearTimeout(entry.stopTimer); entry.stopTimer = undefined; }
 
+  /*
+   * A container is killed through the daemon, not by signalling the CLI's pid.
+   *
+   * The JVM inside a container is not a child of `docker run`: its parent is containerd's shim, so a
+   * pid-tree walk finds the CLI and stops there while the server keeps running. `docker kill` is the
+   * only thing that reliably ends it, and `docker rm -f` guarantees the name is free for the next
+   * start.
+   */
+  const dockerRow = queryOne<{ runtime?: string | null; uuid: string; name: string }>(
+    "SELECT runtime, uuid, name FROM servers WHERE id = ?", [serverId],
+  );
+  if (dockerRow?.runtime === "docker") {
+    const container = containerNameFor(dockerRow.uuid);
+    const result = killContainer(container);
+    entry.state.pid = null;
+    entry.state.pidMark = null;
+    entry.state.foreign = false;
+    entry.state.relayed = false;
+    entry.process = null;
+    entry.relay = null;
+    stopMetrics(serverId);
+    if (!result.ok) {
+      systemLine(serverId, `docker kill failed: ${result.message}`);
+      setStatus(serverId, "error");
+      entry.state.lastError = result.message;
+      return;
+    }
+    systemLine(serverId, `Container ${container} killed and removed.`);
+    entry.state.stopKind = "forced";
+    entry.state.exitCode = 137;
+    setStatus(serverId, "offline");
+    recordActivity({ type: "server.kill", serverId, target: dockerRow.name, actorName: actor, result: "info" });
+    return;
+  }
+
   // cgroup.kill is a supplement, never a substitute: an adopted JVM was never placed in the
   // server's cgroup, so issuing cgroup.kill "succeeded" while the process kept running. Kill the
   // tracked pid tree as well, then verify.
@@ -1076,7 +1247,21 @@ function stopMetrics(serverId: number): void {
 
 async function sampleMetrics(serverId: number, entry: ManagedProcess): Promise<void> {
   const server = queryOne<ServerRow>("SELECT * FROM servers WHERE id = ?", [serverId]);
-  if (!server || !entry.state.pid) return;
+  if (!server) return;
+
+  /*
+   * Container servers are measured by the daemon.
+   *
+   * `/proc/<pid>` cannot answer for a container: the JVM's parent is containerd's shim, so the panel's
+   * process-tree walker sees the CLI and nothing else, and the RSS it reports is the CLI's own few
+   * megabytes. `docker stats` reports the container's cgroup usage — the same number the memory limit
+   * is enforced against.
+   */
+  if (server.runtime === "docker") {
+    await sampleDockerMetrics(serverId, entry, server);
+    return;
+  }
+  if (!entry.state.pid) return;
 
   const snapshot = sampleProcess(entry.state.pid, null);
   const cgroup = process.platform === "linux" ? readUsage(serverId) : null;
@@ -1121,9 +1306,91 @@ async function sampleMetrics(serverId: number, entry: ManagedProcess): Promise<v
   }
 }
 
+/**
+ * One container sample, from the daemon.
+ *
+ * The disk figure stays a real directory scan: the server directory is bind-mounted at `/data`, so the
+ * files are on the host and their size is knowable regardless of what the storage driver is doing.
+ */
+async function sampleDockerMetrics(serverId: number, entry: ManagedProcess, server: ServerRow): Promise<void> {
+  const container = containerNameFor(server.uuid);
+  const stats = await containerStatsAsync(container);
+  const now = Date.now();
+
+  if (now - entry.lastDiskSample > DISK_SAMPLE_MS) {
+    entry.diskBytes = directorySizeSync(serverDirFor(server.uuid));
+    entry.lastDiskSample = now;
+  }
+
+  /*
+   * `docker stats` returns nulls for a stopped container. Falling back to the last known values would
+   * draw a CPU line for a server that is not running, so the sample is simply not published — the
+   * status badge already explains why.
+   */
+  if (stats.cpuPercent === null && stats.memoryBytes === null) return;
+
+  const metrics: ServerMetrics = {
+    ts: now,
+    cpuPercent: Number((stats.cpuPercent ?? 0).toFixed(2)),
+    cpuSource: "docker",
+    memBytes: stats.memoryBytes ?? 0,
+    memCacheBytes: 0,
+    diskBytes: entry.diskBytes,
+    players: entry.state.players.size,
+    netRxBytes: 0,
+    netTxBytes: 0,
+    uptimeSeconds: uptimeSeconds(serverId),
+    tps: null,
+  };
+  entry.lastCpu = metrics.cpuPercent;
+  // The cache `currentMetrics` reads. Writing it here is what makes a page load a lookup instead of a
+  // two-second `docker stats` call.
+  entry.lastDockerMem = metrics.memBytes;
+  entry.lastDockerRunning = true;
+  entry.lastDockerRead = now;
+  bus.publish(serverTopic(serverId), { type: "metrics", serverId, metrics });
+
+  if (now - entry.lastPersist > METRIC_PERSIST_MS) {
+    entry.lastPersist = now;
+    insert(
+      `INSERT INTO server_metrics (server_id, ts, cpu_percent, mem_bytes, disk_bytes, players)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [serverId, now, metrics.cpuPercent, metrics.memBytes, metrics.diskBytes, metrics.players],
+    );
+  }
+}
+
 export function currentMetrics(serverId: number): ServerMetrics {
   const entry = ensureEntry(serverId);
   const server = getServerRow(serverId);
+  /*
+   * Docker servers: a fresh `docker stats` read. It is a process spawn, so it is rate-limited — the
+   * ticker already warms `entry.lastCpu` every few seconds and a dashboard that re-renders in a loop
+   * must not fork a CLI per request.
+   */
+  if (server.runtime === "docker") {
+    /*
+     * Cache only. `docker stats` takes about two seconds and this function is called on every page
+     * load — spawning it here froze the panel (the ping measured 2 s because the event loop was
+     * blocked, not because the network was slow). The sampler fills these values every few seconds;
+     * a request just reads them.
+     */
+    const now = Date.now();
+    const running = entry.lastDockerRunning ?? false;
+    return {
+      ts: now,
+      cpuPercent: running ? Number(entry.lastCpu.toFixed(2)) : 0,
+      cpuSource: running ? "docker" : "stopped",
+      memBytes: running ? (entry.lastDockerMem ?? 0) : 0,
+      memCacheBytes: 0,
+      diskBytes: entry.diskBytes || directorySizeSync(serverDirFor(server.uuid)),
+      players: entry.state.players.size,
+      netRxBytes: 0,
+      netTxBytes: 0,
+      uptimeSeconds: uptimeSeconds(serverId),
+      tps: null,
+    };
+  }
   // peekProcess, not sampleProcess: reading state must not shorten the ticker's CPU window.
   const peek = entry.state.pid ? peekProcess(entry.state.pid) : null;
   const cgroup = entry.state.pid && process.platform === "linux" ? readUsage(serverId) : null;
@@ -1174,6 +1441,64 @@ export function isRunning(serverId: number): boolean {
  * page claimed "Installation failed" next to live metrics. Adopted processes are reported as
  * `recovering` with an explicit explanation, and can be force-killed (no stdin pipe exists).
  */
+/**
+ * Containers that survived a panel restart.
+ *
+ * A container is not a process the panel can re-adopt by scanning `/proc`: the JVM inside it belongs to
+ * containerd, and the `docker run` CLI that used to own the console is gone with the panel. The daemon
+ * still knows about it, so the state is read from `docker inspect` and the console is taken back with
+ * `docker attach` — the same "recovering" state a standalone server gets when its JVM outlives the panel.
+ */
+export function reconcileContainers(): { running: number; cleared: number } {
+  let running = 0;
+  let cleared = 0;
+  const rows = query<{ id: number; uuid: string; name: string; runtime: string | null; status: string }>(
+    "SELECT id, uuid, name, runtime, status FROM servers WHERE runtime = 'docker'",
+  );
+  for (const row of rows) {
+    const container = containerNameFor(row.uuid);
+    const state = inspectContainer(container);
+    const entry = ensureEntry(row.id);
+    if (entry.process) continue;                       // already tracked by this panel
+    if (state.running) {
+      running += 1;
+      // Our stdin pipe died with the old CLI, so this console is read-only until a restart.
+      entry.state.foreign = false;
+      entry.state.relayed = false;
+      entry.state.pid = state.pid;
+      entry.state.pidMark = state.pid ? processStartMark(state.pid) : null;
+      entry.state.startedAt = state.startedAt ? Date.parse(state.startedAt) : Date.now();
+      entry.state.ready = true;
+      setStatus(row.id, "recovering");
+      systemLine(
+        row.id,
+        `Container ${container} is still running from a previous panel session. The console it was started with is gone, `
+        + "so output cannot be followed until this server is restarted from the panel.",
+      );
+      recordActivity({
+        type: "server.container_adopted", serverId: row.id, target: row.name,
+        metadata: { container, pid: state.pid },
+      });
+    } else if (state.exists) {
+      // Exited and left behind: remove it so the next start can reuse the name.
+      const removed = removeContainer(container);
+      if (removed.ok) cleared += 1;
+      if (entry.state.status !== "installing") {
+        entry.state.pid = null;
+        if (["starting", "online", "recovering"].includes(entry.state.status)) {
+          setStatus(row.id, "offline");
+          systemLine(row.id, `Removed the leftover container ${container} (it was not running).`);
+        }
+      }
+    } else if (["starting", "online", "recovering"].includes(row.status)) {
+      // The row claims to be up but no container exists: say so instead of showing a live badge.
+      setStatus(row.id, "offline");
+      systemLine(row.id, `No container named ${container} exists for this server — it is not running.`);
+    }
+  }
+  return { running, cleared };
+}
+
 export function reconcileForeignProcesses(): { adopted: number; released: number } {
   let adopted = 0;
   let released = 0;
