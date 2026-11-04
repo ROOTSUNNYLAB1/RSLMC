@@ -3148,3 +3148,73 @@ html[data-theme] body { transition: background-color 220ms var(--ease); }
   font-size: 10px;
   line-height: 1;
 }
+
+/* Where the endpoint came from, and the command the panel actually ran. */
+.docker-source { color: var(--text-faint); }
+
+.docker-evidence {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.docker-evidence-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.docker-evidence-head .mono {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.docker-evidence-out {
+  margin: 0;
+  padding: 9px 10px;
+  max-height: 132px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim, #b6b8c0);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The endpoint fix field: the only part of the diagnosis that is a control, not a lecture. */
+.docker-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.docker-endpoint-head { display: flex; align-items: center; gap: 8px; }
+.docker-endpoint input { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; }
+.docker-endpoint .banner { margin-top: 2px; }
+
+/* Long values (a PATH-like binary override) wrap instead of being clipped by the row. */
+.docker-facts .info-row { align-items: flex-start; }
+.docker-facts .info-row .k { padding-top: 1px; }
+/* A binary override is a long single token: it must wrap inside the row, not spill past the card edge. */
+.docker-facts .info-row .v {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-align: right;
+}

@@ -782,10 +782,10 @@ decision changes what enforces the limits.
   worlds, players, schedules and the marketplace all use the same code paths as a standalone server.
   Usage is read from `docker stats` (the container's own accounting) rather than `/proc`, because the
   JVM's parent inside a container is containerd's shim, not the CLI.
-* **Honest failures.** No daemon → the Docker card says why (`permission denied … add the user to the
-  docker group`, `daemon is not answering`, `CLI not found`) and the create call refuses with
-  `docker_unavailable` instead of storing a server that can never start. A kill goes through
-  `docker kill` + `rm -f`, because a pid-tree walk cannot reach a containerised JVM.
+* **Honest failures.** No daemon → the Docker card says why, from the panel's own facts rather than
+  from one hard-coded story (see below), and the create call refuses with `docker_unavailable` instead
+  of storing a server that can never start. A kill goes through `docker kill` + `rm -f`, because a
+  pid-tree walk cannot reach a containerised JVM.
 * **Switch later.** Settings → Runtime moves a stopped server between the two runtimes without
   touching its files.
 
@@ -793,15 +793,39 @@ decision changes what enforces the limits.
 
 #### When the panel says "Docker is not available" but your shell can use it
 
-That is almost never the daemon being down — it is the **account the panel runs as**. On a normal VPS the
-socket is `root:docker 0660` and your shell is root, so `docker pull` works there and the panel gets
-`permission denied`. The wizard now reports the facts instead of guessing:
+"Works in my shell, not in the panel" is the normal way this breaks, and it has two very different
+causes — the panel being unprivileged, or the panel being root while **something else** about the two
+processes differs. The wizard reports its own side of the argument instead of guessing: the account and
+uid it runs as, its groups, the endpoint it used *and which layer chose it*, whether the socket exists,
+whether the panel is inside a container, the environment the CLI inherits, and the exact command it ran
+with the CLI's raw output underneath.
 
-<img src="docs/screenshots/docker-diagnosis.png" alt="The Docker access diagnosis in the wizard" width="100%">
+<img src="docs/screenshots/docker-root-diagnosis.png" alt="The Docker diagnosis for a panel that already runs as root" width="100%">
 
-It names the panel's account and uid, that account's groups, the socket it tried (mode and group), and
-then lists the fixes in order — with the one detail people miss: **a running process does not pick up a
-new group**, so `usermod -aG docker` alone changes nothing until the panel is restarted.
+**If the panel runs as root** (the common case on a VPS, where the whole panel is one root process), group
+advice is meaningless — root opens any `0660` socket. The panel says so explicitly and switches to the
+causes that are left:
+
+| Symptom on a root-run panel | What it means | Fix |
+|---|---|---|
+| `permission denied` | Not a group problem. Either the socket belongs to a *different* account (rootless Docker, Podman) or SELinux/AppArmor is blocking it | enter the socket your shell actually uses under **Docker endpoint** (or `RSLMC_DOCKER_HOST`); compare with `docker context ls`, `echo $DOCKER_HOST`, `ausearch -m avc -ts recent` |
+| `no such file or directory` + *inside a container* | The panel is containerised and the host socket was never mounted in — no amount of `systemctl start docker` can help | start the panel with `-v /var/run/docker.sock:/var/run/docker.sock` |
+| `no such file or directory` on the host | Nothing is listening there | `systemctl start docker`, or open Docker Desktop |
+| "could not execute the CLI" | The panel's `PATH` is not your shell's `PATH` — a snap install lives in `/snap/bin`, a per-user one in `~/.docker/bin` | the reason lists every path that was searched; point the panel at the real one |
+
+**Fixing it from the panel.** Under the diagnosis there is a **Docker endpoint** field. Type the socket
+(or a Docker context name), press **Test & save**: the panel probes it and stores it in its own database
+**only if a daemon answers through it**, so a wrong value can never replace one unexplained failure with
+another. It survives restarts, needs no `.env` edit and no restart, and can be cleared again with
+**Reset**. The saved value is reported back as `from panel setting` next to the endpoint, so an override
+is never invisible.
+
+Precedence, highest first: `RSLMC_DOCKER_HOST` → the saved panel setting → `DOCKER_HOST` → the platform
+default (`unix:///var/run/docker.sock`, `npipe://…` on Windows).
+
+**If the panel is unprivileged**, the original diagnosis still applies — the account, the socket's mode
+and group, and the detail people miss: **a running process does not pick up a new group**, so
+`usermod -aG docker` alone changes nothing until the panel is restarted.
 
 | Fix | How |
 |---|---|
@@ -813,7 +837,7 @@ The panel also checks for rootless/Podman sockets and for `/run/docker.sock`, an
 is a **different** daemon (a symlink to the same socket is filtered out — suggesting it would send you in
 a circle). "Check again" re-probes without a reload.
 
-
+<img src="docs/screenshots/docker-diagnosis.png" alt="The Docker access diagnosis for an unprivileged panel" width="100%">
 
 ### Files, properties, players, worlds, plugins
 
@@ -1115,9 +1139,9 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (40 files, 417 tests)
+bun run test                          # every suite, one process per file (40 files, 427 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
-bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
+bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
 bun run typecheck                     # tsc --noEmit, strict
 ```

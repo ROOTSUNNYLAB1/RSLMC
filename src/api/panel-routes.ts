@@ -6,7 +6,11 @@ import { hostStats, diskUsage } from "../resources/host";
 import { describeEnforcement } from "../resources/enforcement";
 import { detectCgroups } from "../resources/cgroups";
 import { describeRoutes } from "./index";
-import { listImages, listPanelContainers, probeDocker, pullImage } from "../runtime/docker";
+import {
+  dockerConfigOverride, dockerEndpoint, listImages, listPanelContainers, probeDocker, pullImage,
+  setDockerConfigOverride, type DockerConfig,
+} from "../runtime/docker";
+import { getSetting, setSetting } from "../database";
 import { describeImages, imageForMajor, yolksJavaTags } from "../runtime/images";
 import { recordActivity } from "../services/audit";
 import {
@@ -30,6 +34,18 @@ import {
  */
 
 const ADMIN_PERMISSION = "system.manage";
+
+/** settings key for the panel-stored Docker endpoint/binary. */
+const DOCKER_CONFIG_KEY = "docker.config";
+
+export function loadDockerConfig(): void {
+  try {
+    const raw = getSetting(DOCKER_CONFIG_KEY, null);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as DockerConfig;
+    setDockerConfigOverride({ host: parsed.host ?? null, bin: parsed.bin ?? null });
+  } catch { /* a corrupt row must not stop the panel from booting */ }
+}
 
 function requireAdmin(user: any) {
   requirePermission(user, ADMIN_PERMISSION);
@@ -205,9 +221,75 @@ export function registerPanelRoutes(router: Router): void {
     const images = info.available ? listImages() : [];
     return json({
       docker: info,
+      config: dockerConfigOverride(),
+      /* What the panel would tell a fresh process to use, so the UI can show an override's origin. */
+      effectiveEndpoint: dockerEndpoint(),
       images: images.filter((image) => image.reference.includes("yolks") || image.reference.includes("temurin")),
       containers: info.available ? listPanelContainers() : [],
     });
+  });
+
+  /**
+   * Saves the endpoint (and optionally the binary) the panel should use, after *proving* it works.
+   *
+   * The order matters: the value is probed first and only stored when the daemon answers through it.
+   * Saving an endpoint that fails would replace one unexplained "not available" with another, so a
+   * failure is returned as a 400 carrying the daemon's own words and nothing is written.
+   */
+  router.post("/api/panel/docker/config", async (ctx) => {
+    requireAdmin(ctx.user);
+    const body = await ctx.body<{ host?: string | null; bin?: string | null }>();
+    const host = body.host?.trim() || null;
+    const bin = body.bin?.trim() || null;
+    if (host && /[\s;]/.test(host)) throw new ApiException(400, "bad_endpoint", "An endpoint cannot contain spaces or semicolons.");
+    /*
+     * The endpoint decides which daemon receives the panel's commands, so it is not free text: a
+     * context name or one of the transports Docker itself understands. This is an admin-only route,
+     * but "admin can already edit .env" is not a reason to accept `file:///etc/shadow` as a host.
+     */
+    if (host?.includes("://")) {
+      const scheme = host.slice(0, host.indexOf("://")).toLowerCase();
+      if (!["unix", "tcp", "http", "https", "npipe", "ssh", "fd"].includes(scheme)) {
+        throw new ApiException(400, "bad_endpoint", `${scheme}:// is not a Docker endpoint scheme. Use unix://, tcp://, npipe://, ssh:// or a context name.`);
+      }
+    }
+    if (bin && !/[\\/]/.test(bin)) throw new ApiException(400, "bad_binary", "Give the absolute path to the docker binary.");
+
+    const previous = dockerConfigOverride();
+    setDockerConfigOverride({ host, bin });
+    const probed = probeDocker(true);
+    if (!probed.available) {
+      setDockerConfigOverride(previous);
+      probeDocker(true);
+      throw new ApiException(
+        400,
+        "endpoint_unreachable",
+        `${host ?? bin ?? "That value"} did not reach a daemon: ${probed.reason ?? "no answer"} Nothing was saved.`,
+      );
+    }
+    setSetting(DOCKER_CONFIG_KEY, JSON.stringify({ host, bin }));
+    recordActivity({
+      type: "panel.docker_config_changed",
+      actorName: ctx.user!.username,
+      target: host ?? bin ?? "default",
+      metadata: { endpoint: host, binary: bin },
+    });
+    return json({ ok: true, config: dockerConfigOverride(), docker: probed });
+  });
+
+  /** Forgets the saved endpoint and goes back to the environment or the default socket. */
+  router.delete("/api/panel/docker/config", async (ctx) => {
+    requireAdmin(ctx.user);
+    setSetting(DOCKER_CONFIG_KEY, JSON.stringify({ host: null, bin: null }));
+    setDockerConfigOverride(null);
+    const probed = probeDocker(true);
+    recordActivity({
+      type: "panel.docker_config_changed",
+      actorName: ctx.user!.username,
+      target: "default",
+      metadata: { endpoint: null, binary: null },
+    });
+    return json({ ok: true, config: dockerConfigOverride(), docker: probed });
   });
 
   /** The Java image list, with the registry's real tags and what is already on this machine. */

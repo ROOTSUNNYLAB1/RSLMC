@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Boxes, Cpu, Download, HardDrive, Info, MemoryStick, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
-import { Banner, Button, Pill } from "./ui";
+import { Boxes, Copy, Cpu, Download, HardDrive, Info, MemoryStick, RefreshCw, RotateCcw, ShieldCheck, Terminal, TriangleAlert } from "lucide-react";
+import { Banner, Button, Input, Pill } from "./ui";
 import { api, errorMessage } from "../lib/api";
-import { useToast } from "../lib/app";
+import { useSession, useToast } from "../lib/app";
 import { formatBytes } from "../lib/format";
 
 /*
@@ -19,16 +19,39 @@ import { formatBytes } from "../lib/format";
 
 export type RuntimeChoice = "standalone" | "docker";
 
+interface DockerEvidence {
+  command: string;
+  binary: string;
+  exitCode: number;
+  stderr: string;
+  checkedAt: number;
+}
+
 interface DockerAccess {
   user: string;
   uid: number | null;
+  elevated: boolean;
+  platformLabel: string;
   groups: string[];
   endpoint: string;
+  endpointSource: string;
   socketExists: boolean;
   socketMode: string | null;
   socketGroup: string | null;
   groupMissing: boolean;
   alternatives: string[];
+  inContainer: boolean;
+  environment: {
+    platform: string;
+    path: string;
+    home: string | null;
+    dockerHost: string | null;
+    dockerContext: string | null;
+    binEnv: string | null;
+    cliContext: string | null;
+  };
+  binaries: { path: string; exists: boolean }[];
+  evidence: DockerEvidence | null;
   hints: string[];
 }
 
@@ -40,6 +63,11 @@ interface DockerInfo {
   diskQuota: boolean;
   reason: string | null;
   access?: DockerAccess | null;
+}
+
+interface DockerConfig {
+  host: string | null;
+  bin: string | null;
 }
 
 interface JavaImage {
@@ -63,17 +91,25 @@ export function RuntimePicker({
   diskMb: number;
 }) {
   const toast = useToast();
+  const { can } = useSession();
+  const canManage = can("system.manage");
   const [docker, setDocker] = useState<DockerInfo | null>(null);
+  const [config, setConfig] = useState<DockerConfig>({ host: null, bin: null });
   const [images, setImages] = useState<JavaImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [pulling, setPulling] = useState(false);
   const [pullNote, setPullNote] = useState<string | null>(null);
+  const [endpointDraft, setEndpointDraft] = useState("");
+  const [savingEndpoint, setSavingEndpoint] = useState(false);
+  const [endpointNote, setEndpointNote] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const result = await api.get<{ docker: DockerInfo }>("/api/panel/docker");
+      const result = await api.get<{ docker: DockerInfo; config?: DockerConfig }>("/api/panel/docker");
       setDocker(result.docker);
+      if (result.config) setConfig(result.config);
       if (result.docker.available) {
         const list = await api.get<{ majors: JavaImage[] }>("/api/panel/docker/images");
         setImages(list.majors);
@@ -99,6 +135,53 @@ export function RuntimePicker({
 
   const selected = images.find((entry) => entry.reference === image) ?? null;
   const dockerBlocked = docker !== null && !docker.available;
+
+  /* Pre-fill the fix field with whatever is in force, so "Test" without editing re-probes it. */
+  useEffect(() => {
+    if (!endpointDraft && docker?.access?.endpoint) setEndpointDraft(docker.access.endpoint);
+  }, [docker?.access?.endpoint]);
+
+  const saveEndpoint = async (value: string) => {
+    setSavingEndpoint(true);
+    setEndpointNote(null);
+    try {
+      const result = await api.post<{ docker: DockerInfo; config: DockerConfig }>("/api/panel/docker/config", { host: value });
+      setDocker(result.docker);
+      setConfig(result.config);
+      toast.success("Docker endpoint saved", `${value} reached the daemon.`);
+      await load();
+    } catch (caught) {
+      setEndpointNote(errorMessage(caught));
+    } finally {
+      setSavingEndpoint(false);
+    }
+  };
+
+  const resetEndpoint = async () => {
+    setSavingEndpoint(true);
+    setEndpointNote(null);
+    try {
+      const result = await api.delete<{ docker: DockerInfo; config: DockerConfig }>("/api/panel/docker/config");
+      setDocker(result.docker);
+      setConfig(result.config);
+      setEndpointDraft(result.docker.access?.endpoint ?? "");
+      toast.success("Endpoint override cleared", "The panel is back on the environment or default socket.");
+    } catch (caught) {
+      setEndpointNote(errorMessage(caught));
+    } finally {
+      setSavingEndpoint(false);
+    }
+  };
+
+  const copyEvidence = async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   const prepare = async () => {
     setPulling(true);
@@ -175,29 +258,49 @@ export function RuntimePicker({
 
       {dockerBlocked ? (
         <div className="docker-diag">
-          <Banner tone="warning" title="Docker is installed, but the panel cannot reach its daemon">
+          <Banner
+            tone="warning"
+            title={docker?.access && docker.access.binaries.some((entry) => entry.exists === false) && !docker.access.evidence
+              ? "The panel cannot execute a Docker command"
+              : "Docker is installed, but the panel cannot reach its daemon"}
+          >
             {docker?.access?.hints?.[0] ?? docker?.reason}
           </Banner>
           {/*
-            The facts, not just the error text. "Docker works in my shell but not in the panel" almost
-            always means the panel's account is not in the socket's group — showing which account, which
-            socket and which group makes that obvious instead of mysterious.
+            The facts, not just the error text. "Docker works in my shell but not in the panel" is a
+            disagreement between two processes, so the panel shows its own side of it: which account and
+            namespace it is in, which endpoint it used and why, and what the CLI printed when it tried.
+            A panel that is already root is called out explicitly, because group advice is useless there.
           */}
           {docker?.access ? (
             <div className="info-list docker-facts">
               <div className="info-row">
                 <span className="k">Panel account</span>
-                <span className="v mono">{docker.access.user}{docker.access.uid !== null ? ` (uid ${docker.access.uid})` : ""}</span>
+                <span className="v mono">
+                  {docker.access.user}
+                  {docker.access.uid !== null ? ` (uid ${docker.access.uid})` : ""}
+                  {docker.access.elevated ? " · privileged" : ""}
+                </span>
               </div>
+              {docker.access.elevated ? null : (
+                <div className="info-row">
+                  <span className="k">Its groups</span>
+                  <span className="v mono">{docker.access.groups.join(", ") || "—"}</span>
+                </div>
+              )}
               <div className="info-row">
-                <span className="k">Its groups</span>
-                <span className="v mono">{docker.access.groups.join(", ") || "—"}</span>
+                <span className="k">Endpoint</span>
+                <span className="v mono">
+                  {docker.access.endpoint}
+                  <span className="docker-source"> from {docker.access.endpointSource}</span>
+                </span>
               </div>
               <div className="info-row">
                 <span className="k">Socket</span>
                 <span className="v mono">
-                  {docker.access.endpoint}
-                  {docker.access.socketExists ? ` · ${docker.access.socketMode ?? ""}${docker.access.socketGroup ? ` · group ${docker.access.socketGroup}` : ""}` : " · not found"}
+                  {docker.access.socketExists
+                    ? `${docker.access.socketMode ?? ""}${docker.access.socketGroup ? ` · group ${docker.access.socketGroup}` : ""}`
+                    : "not found at that path"}
                 </span>
               </div>
               {docker.access.groupMissing ? (
@@ -205,6 +308,45 @@ export function RuntimePicker({
                   <span className="k">Missing</span>
                   <span className="v">the <span className="mono">{docker.access.socketGroup}</span> group on this account</span>
                 </div>
+              ) : null}
+              <div className="info-row">
+                <span className="k">Namespace</span>
+                <span className="v">
+                  {docker.access.inContainer ? "inside a container" : "the host itself"}
+                  {docker.access.environment.cliContext ? ` · CLI context “${docker.access.environment.cliContext}”` : ""}
+                </span>
+              </div>
+              {docker.access.environment.dockerHost || docker.access.environment.dockerContext || docker.access.environment.binEnv ? (
+                <div className="info-row">
+                  <span className="k">Inherited env</span>
+                  <span className="v mono">
+                    {[
+                      docker.access.environment.dockerHost ? `DOCKER_HOST=${docker.access.environment.dockerHost}` : null,
+                      docker.access.environment.dockerContext ? `DOCKER_CONTEXT=${docker.access.environment.dockerContext}` : null,
+                      docker.access.environment.binEnv ? `RSLMC_DOCKER_BIN=${docker.access.environment.binEnv}` : null,
+                    ].filter(Boolean).join(" · ")}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {/* The command and its raw output. Untranslated on purpose: this is the evidence. */}
+          {docker?.access?.evidence ? (
+            <div className="docker-evidence">
+              <div className="docker-evidence-head">
+                <Terminal size={12} />
+                <span className="mono">{docker.access.evidence.command}</span>
+                <span className="spacer" />
+                <Pill tone={docker.access.evidence.exitCode === 0 ? "amber" : "red"}>
+                  exit {docker.access.evidence.exitCode}
+                </Pill>
+                <Button variant="ghost" icon={<Copy size={11} />} onClick={() => void copyEvidence(docker.access!.evidence!.command)}>
+                  {copied ? "Copied" : "Copy"}
+                </Button>
+              </div>
+              {docker.access.evidence.stderr ? (
+                <pre className="docker-evidence-out">{docker.access.evidence.stderr}</pre>
               ) : null}
             </div>
           ) : null}
@@ -223,6 +365,47 @@ export function RuntimePicker({
               </div>
             ))}
           </div>
+
+          {/*
+            The fix itself, not just instructions. Testing the endpoint from the panel is the difference
+            between "compare your shell with mine" and a working Docker card 5 seconds later, and a value
+            is only stored when the daemon actually answers through it.
+          */}
+          {canManage ? (
+            <div className="docker-endpoint">
+              <div className="docker-endpoint-head">
+                <span className="text-xs faint">Docker endpoint</span>
+                {config.host ? <Pill tone="blue">override saved</Pill> : null}
+              </div>
+              <div className="row" style={{ gap: 8 }}>
+                <Input
+                  value={endpointDraft}
+                  onChange={(event) => setEndpointDraft(event.target.value)}
+                  placeholder="unix:///var/run/docker.sock · tcp://host:2376 · context name"
+                  spellCheck={false}
+                  aria-label="Docker endpoint"
+                />
+                <Button
+                  loading={savingEndpoint}
+                  className="shrink-0"
+                  onClick={() => void saveEndpoint(endpointDraft.trim())}
+                  disabled={!endpointDraft.trim()}
+                >
+                  Test &amp; save
+                </Button>
+                {config.host ? (
+                  <Button variant="ghost" icon={<RotateCcw size={12} />} onClick={() => void resetEndpoint()} disabled={savingEndpoint}>
+                    Reset
+                  </Button>
+                ) : null}
+              </div>
+              <span className="text-xs faint">
+                Saved only if the daemon answers through it. Stored in the panel's database, so it survives
+                restarts and needs no <span className="mono">.env</span> edit.
+              </span>
+              {endpointNote ? <Banner tone="error" title="Not saved">{endpointNote}</Banner> : null}
+            </div>
+          ) : null}
 
           <div className="row" style={{ gap: 8 }}>
             <Button icon={<RefreshCw size={12} />} onClick={() => void load()} disabled={loading}>

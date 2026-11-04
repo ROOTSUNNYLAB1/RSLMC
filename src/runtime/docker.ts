@@ -16,25 +16,68 @@ import { userInfo } from "node:os";
  * not offer the option.
  */
 
+/** A command the panel actually ran, kept so the operator can run the very same thing. */
+export interface DockerEvidence {
+  /** Full command line, host overrides included — copy-pasteable in a shell. */
+  command: string;
+  /** The binary that was executed, as resolved (an absolute path when one was found). */
+  binary: string;
+  exitCode: number;
+  /** What the CLI printed, verbatim and unparaphrased. Truncated, never rewritten. */
+  stderr: string;
+  checkedAt: number;
+}
+
 /** Everything the panel knows about *why* Docker is or is not usable here. */
 export interface DockerAccess {
   /** The unix user the panel process runs as — the account whose socket access is being tested. */
   user: string;
   uid: number | null;
+  /** True when the panel is already root (or Administrator): group advice is then nonsense. */
+  elevated: boolean;
+  /** `process.platform`, so the UI can say "Administrator" rather than "uid 0" on Windows. */
+  platformLabel: string;
   /** Groups of that user, by name. */
   groups: string[];
-  /** The socket (or TCP endpoint) the CLI tried. */
+  /** The socket (or TCP endpoint) the CLI tried, and where that choice came from. */
   endpoint: string;
+  endpointSource: EndpointSource;
   socketExists: boolean;
   socketMode: string | null;
   socketGroup: string | null;
-  /** True when the socket exists and the panel's user is neither root nor in the socket's group. */
+  /** True when the socket exists, the panel is not root, and the account is not in its group. */
   groupMissing: boolean;
   /** Alternative sockets that exist on this machine (rootless Docker, Podman). */
   alternatives: string[];
+  /**
+   * True when the panel itself looks like it is running inside a container. That flips the advice
+   * completely: an inner container has no host socket unless one was mounted in, and no amount of
+   * `systemctl start docker` will change that.
+   */
+  inContainer: boolean;
+  /** What the CLI would inherit — the usual place a shell and a service disagree. */
+  environment: {
+    platform: string;
+    path: string;
+    home: string | null;
+    /** `DOCKER_HOST` / `DOCKER_CONTEXT` as the *panel process* sees them. */
+    dockerHost: string | null;
+    dockerContext: string | null;
+    /** `RSLMC_DOCKER_BIN`, when set: it outranks the panel's saved binary, so it must be visible. */
+    binEnv: string | null;
+    /** `currentContext` from `~/.docker/config.json`, when the CLI would pick a context up. */
+    cliContext: string | null;
+  };
+  /** Every path the panel considers for the CLI, with whether it is there. */
+  binaries: { path: string; exists: boolean }[];
+  /** The failing command and its raw output, when a command is what failed. */
+  evidence: DockerEvidence | null;
   /** Copy-pasteable fixes, most appropriate first. */
   hints: string[];
 }
+
+/** Which layer decided the endpoint. Shown in the UI so an override is never invisible. */
+export type EndpointSource = "RSLMC_DOCKER_HOST" | "DOCKER_HOST" | "panel setting" | "default";
 
 export interface DockerInfo {
   /** True only when the CLI answered `docker info` — i.e. a daemon is reachable. */
@@ -57,6 +100,8 @@ export interface DockerInfo {
 }
 
 interface CommandResult {
+  /** The exact argv that was executed, for the evidence block. */
+  command: string;
   ok: boolean;
   stdout: string;
   stderr: string;
@@ -66,30 +111,34 @@ interface CommandResult {
 }
 
 /**
- * Where the CLI might be. Read on every probe rather than at import time, so an operator (or a test)
- * can point `RSLMC_DOCKER_BIN` at a specific binary without restarting the panel.
+ * A panel-wide override that does not need an editor or a restart.
+ *
+ * `.env` is the right place for a decision the operator makes once, but it is the wrong place for
+ * debugging: restarting the panel to try one socket is how a five-second fix turns into an evening.
+ * The wizard can therefore test an endpoint and save it (admin only, `system.manage`), and the saved
+ * value is consulted as if it had been exported.
  */
-function dockerCandidates(): string[] {
-  return [
-    process.env.RSLMC_DOCKER_BIN,
-    "docker",
-    "/usr/bin/docker",
-    "/usr/local/bin/docker",
-    "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
-  ].filter((value): value is string => Boolean(value));
+export interface DockerConfig {
+  /** `unix:///var/run/docker.sock`, `tcp://host:2376`, or a named context. Empty = default. */
+  host: string | null;
+  /** Absolute path to the CLI, for machines where PATH and the panel disagree. */
+  bin: string | null;
 }
 
-let cachedCli: string | null = null;
-let cachedInfo: DockerInfo | null = null;
-let cacheAt = 0;
-const INFO_TTL_MS = 15_000;
+let configOverride: DockerConfig = { host: null, bin: null };
 
-/**
- * Runs a Docker command with a timeout and no shell.
- *
- * `stdin: "ignore"` matters: `docker` reading a terminal it does not have is how a panel hangs on a
- * dead daemon instead of reporting it.
- */
+/** Sets (or clears, with `null`) the panel-stored override. Invalidates the probe cache. */
+export function setDockerConfigOverride(config: DockerConfig | null): void {
+  configOverride = { host: config?.host?.trim() || null, bin: config?.bin?.trim() || null };
+  cachedCli = configOverride.bin;
+  cachedInfo = null;
+  cacheAt = 0;
+}
+
+export function dockerConfigOverride(): DockerConfig {
+  return { ...configOverride };
+}
+
 /**
  * Extra arguments that decide *which* daemon is talked to.
  *
@@ -98,24 +147,42 @@ const INFO_TTL_MS = 15_000;
  * `/run/podman/podman.sock`, and a hardened host may only expose a TCP endpoint. Without this the panel
  * insists on `/var/run/docker.sock` while the operator's own `docker` command talks to something else —
  * which is exactly "docker works in my shell but not in the panel".
+ *
+ * Precedence is deliberate: the panel-specific variable beats the panel's own saved setting, which
+ * beats the generic `DOCKER_HOST` that a systemd unit may have inherited years ago, which beats the
+ * default. Every layer is reported by `dockerEndpointSource()`, so an override can never be invisible.
  */
+function resolveHost(): { host: string | null; source: EndpointSource } {
+  const specific = process.env.RSLMC_DOCKER_HOST?.trim();
+  if (specific) return { host: specific, source: "RSLMC_DOCKER_HOST" };
+  if (configOverride.host) return { host: configOverride.host, source: "panel setting" };
+  const generic = process.env.DOCKER_HOST?.trim();
+  if (generic) return { host: generic, source: "DOCKER_HOST" };
+  return { host: null, source: "default" };
+}
+
 export function dockerHostArgs(): string[] {
-  const host = process.env.RSLMC_DOCKER_HOST?.trim() || process.env.DOCKER_HOST?.trim();
+  const { host } = resolveHost();
   return host ? ["-H", host] : [];
 }
 
 /** The endpoint the CLI will use, for the diagnosis. */
 export function dockerEndpoint(): string {
-  const host = process.env.RSLMC_DOCKER_HOST?.trim() || process.env.DOCKER_HOST?.trim();
+  const { host } = resolveHost();
   if (host) return host;
   if (process.platform === "win32") return "npipe:////./pipe/docker_engine";
   return "unix:///var/run/docker.sock";
 }
 
+/** Which layer chose the endpoint currently in force. */
+export function dockerEndpointSource(): EndpointSource {
+  return resolveHost().source;
+}
+
 /**
  * `sudo -n docker …`, when the operator asked for it.
  *
- * This is the escape hatch for the common VPS layout: the panel runs as an unprivileged account, the
+ * This is the escape hatch for the VPS layout where the panel runs as an unprivileged account, the
  * socket is `root:docker 0660`, and adding the account to the group needs a service restart. With a
  * `NOPASSWD` sudoers entry and `RSLMC_DOCKER_SUDO=1` the panel can use the daemon without being root
  * itself. `-n` is deliberate: a password prompt would hang a daemon probe forever.
@@ -127,6 +194,55 @@ function sudoPrefix(): string[] {
   return uid === 0 ? [] : ["sudo", "-n"];
 }
 
+/** True when the panel process is already privileged — root, or Administrator on Windows. */
+export function panelIsElevated(): boolean {
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (uid === 0) return true;
+  return process.platform === "win32" && Boolean(process.env.USERPROFILE) && (process.env.USERNAME ?? "").toLowerCase() === "administrator";
+}
+
+/**
+ * Where the CLI might be.
+ *
+ * Read on every probe rather than at import time, so an operator (or a test) can point
+ * `RSLMC_DOCKER_BIN` at a specific binary without restarting the panel. The list matters because the
+ * *panel's* PATH is not the operator's PATH: a snap install lives in `/snap/bin`, a per-user install in
+ * `~/.docker/bin`, and a service started by systemd often has none of those.
+ */
+function dockerCandidates(): string[] {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return [
+    process.env.RSLMC_DOCKER_BIN,
+    configOverride.bin,
+    "/usr/bin/docker",
+    "/usr/local/bin/docker",
+    "/snap/bin/docker",
+    "/opt/homebrew/bin/docker",
+    home ? `${home}/.docker/bin/docker` : null,
+    "/usr/bin/podman",
+    "docker",
+    "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+  ].filter((value): value is string => Boolean(value));
+}
+
+let cachedCli: string | null = null;
+let cachedInfo: DockerInfo | null = null;
+let cacheAt = 0;
+const INFO_TTL_MS = 15_000;
+
+/** Renders an argv the way a shell would accept it, quoting only what needs quoting. */
+function displayCommand(argv: string[]): string {
+  return argv.map((part) => (/^[\w@%+=:,./-]+$/.test(part) ? part : `'${part.replace(/'/g, `'\\''`)}'`)).join(" ");
+}
+
+/**
+ * Runs a Docker command with a timeout and no shell.
+ *
+ * `stdin: "ignore"` matters: `docker` reading a terminal it does not have is how a panel hangs on a
+ * dead daemon instead of reporting it. The inherited environment is passed through whole — a curated
+ * subset is how a working `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` from the operator's shell
+ * silently disappears in the panel.
+ */
 export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult {
   // An explicit override wins over probing: an operator who points RSLMC_DOCKER_BIN at a binary
   // means it, and a failure must be reported for that binary rather than silently using PATH.
@@ -134,8 +250,9 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
     if (candidate.includes("/") || candidate.includes("\\")) return existsSync(candidate);
     return true;                                    // bare name: let PATH decide
   }) ?? "docker";
+  const argv = [...sudoPrefix(), bin, ...dockerHostArgs(), ...args];
   try {
-    const result = Bun.spawnSync([...sudoPrefix(), bin, ...args], {
+    const result = Bun.spawnSync(argv, {
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
@@ -143,6 +260,7 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
       timeout: timeoutMs,
     });
     return {
+      command: displayCommand(argv),
       ok: result.exitCode === 0,
       stdout: result.stdout.toString(),
       stderr: result.stderr.toString(),
@@ -151,6 +269,7 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
     };
   } catch (error) {
     return {
+      command: displayCommand(argv),
       ok: false,
       stdout: "",
       stderr: error instanceof Error ? error.message : String(error),
@@ -169,8 +288,9 @@ export function dockerCommand(args: string[], timeoutMs = 20_000): CommandResult
  */
 export async function dockerCommandAsync(args: string[], timeoutMs = 20_000): Promise<CommandResult> {
   const bin = process.env.RSLMC_DOCKER_BIN ?? dockerBin();
+  const argv = [...sudoPrefix(), bin, ...dockerHostArgs(), ...args];
   try {
-    const child = Bun.spawn([...sudoPrefix(), bin, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env } });
     const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } }, timeoutMs);
     const [stdout, stderr] = await Promise.all([
       new Response(child.stdout as ReadableStream<Uint8Array>).text(),
@@ -178,9 +298,9 @@ export async function dockerCommandAsync(args: string[], timeoutMs = 20_000): Pr
     ]);
     const code = await child.exited;
     clearTimeout(timer);
-    return { ok: code === 0, stdout, stderr, code, missing: false };
+    return { command: displayCommand(argv), ok: code === 0, stdout, stderr, code, missing: false };
   } catch (error) {
-    return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), code: -1, missing: true };
+    return { command: displayCommand(argv), ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), code: -1, missing: true };
   }
 }
 
@@ -206,13 +326,14 @@ export function dockerBin(): string {
 }
 
 function dockerCommandFor(bin: string, args: string[], timeoutMs: number): CommandResult {
+  const argv = [...bin, ...args];
   try {
-    const result = Bun.spawnSync([bin, ...args], {
+    const result = Bun.spawnSync(argv, {
       stdout: "pipe", stderr: "pipe", stdin: "ignore", timeout: timeoutMs,
     });
-    return { ok: result.exitCode === 0, stdout: result.stdout.toString(), stderr: result.stderr.toString(), code: result.exitCode ?? -1, missing: false };
+    return { command: displayCommand(argv), ok: result.exitCode === 0, stdout: result.stdout.toString(), stderr: result.stderr.toString(), code: result.exitCode ?? -1, missing: false };
   } catch (error) {
-    return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), code: -1, missing: true };
+    return { command: displayCommand(argv), ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error), code: -1, missing: true };
   }
 }
 
@@ -228,7 +349,19 @@ export function probeDocker(force = false): DockerInfo {
   const cliVersion = dockerCommand(["version", "--format", "{{.Client.Version}}"], 12_000);
 
   if (version.missing && cliVersion.missing) {
-    cachedInfo = emptyInfo("The Docker CLI was not found on this machine. Install Docker Engine (Linux) or Docker Desktop (Windows/macOS) to create container servers.");
+    /*
+     * No CLI at all. This is *not* always "Docker is not installed": the panel's PATH is whatever the
+     * service manager gave it, and a snap or per-user install is invisible from there. The reason
+     * therefore lists the paths that were tried, which is the only useful thing to say.
+     */
+    const access = diagnoseMissingCli();
+    cachedInfo = {
+      ...emptyInfo(
+        "The Docker CLI could not be executed from the panel, so container servers cannot be created yet. "
+        + (access.hints[0] ?? ""),
+      ),
+      access,
+    };
     cacheAt = now;
     return cachedInfo;
   }
@@ -236,12 +369,11 @@ export function probeDocker(force = false): DockerInfo {
   const info = dockerCommand(["info", "--format", "{{json .}}"], 15_000);
   if (!info.ok) {
     const stderr = `${info.stderr}${info.stdout}`.trim();
-    const access = diagnoseAccess(stderr);
+    const access = diagnoseAccess(stderr, evidenceFor(info, stderr));
     cachedInfo = {
       ...emptyInfo(
-        "Docker is installed but its daemon could not be reached from the panel. "
-        + `${firstLine(stderr) || "docker info failed"}${access.hints.length > 0 ? ` — ${access.hints[0]}` : ""}`
-        + " Start the daemon (systemctl start docker / launch Docker Desktop) and press Check again.",
+        `Docker is installed but its daemon could not be reached from the panel: ${firstLine(stderr) || "docker info failed"}.`
+        + (access.hints.length > 0 ? ` ${access.hints[0]}` : ""),
         cliVersion.ok ? cliVersion.stdout.trim() : null,
       ),
       access,
@@ -262,7 +394,7 @@ export function probeDocker(force = false): DockerInfo {
   const serverVersion = String(parsed.ServerVersion ?? "").trim();
   if (serverErrors.length > 0 || !serverVersion) {
     const detail = serverErrors[0] ?? "the daemon returned no server version";
-    const access = diagnoseAccess(detail);
+    const access = diagnoseAccess(detail, evidenceFor(info, detail));
     cachedInfo = {
       ...emptyInfo(
         `Docker is installed but the daemon refused the request: ${detail}.`
@@ -299,53 +431,148 @@ export function probeDocker(force = false): DockerInfo {
     reason: null,
     cliPath: dockerBin(),
     checkedAt: now,
-    access: collectAccessFacts([]),
+    access: collectAccessFacts(),
   };
   cacheAt = now;
   return cachedInfo;
 }
 
+function evidenceFor(result: CommandResult, detail: string): DockerEvidence {
+  return {
+    command: result.command,
+    binary: result.command.split(" ")[0] ?? "docker",
+    exitCode: result.code,
+    stderr: detail.trim().slice(0, 600),
+    checkedAt: Date.now(),
+  };
+}
+
 /**
  * Works out *why* the daemon is unreachable, from facts on this machine rather than from the message.
  *
- * The single most common case is not "the daemon is down": it is the panel running as a user that is
- * not in the socket's group, while the operator's own shell is root — so `docker pull` works for them
- * and not for the panel. Saying "start the daemon" in that situation sends people in the wrong
- * direction, which is exactly what happened when this shipped.
+ * Two reports shaped this:
+ *
+ *   1. The panel ran as an unprivileged user while the operator's shell was root, and the panel said
+ *      "start the daemon" — wrong advice, wrong direction.
+ *   2. The panel ran **as root** and still failed. Group advice is then meaningless: root opens any
+ *      0660 socket. What is left is a different endpoint (rootless/Podman, a context, a stale
+ *      `DOCKER_HOST`), a socket that was never mounted into the panel's container, or SELinux.
+ *
+ * So the diagnosis is written from the panel's own elevation, its namespace, and the environment the
+ * CLI actually inherits — never from a single hard-coded story.
  */
-export function diagnoseAccess(detail: string): DockerAccess {
+export function diagnoseAccess(detail: string, evidence: DockerEvidence | null = null): DockerAccess {
+  const facts = collectAccessFacts();
+  facts.evidence = evidence;
+  return { ...facts, hints: hintsForFacts(facts, detail) };
+}
+
+/**
+ * The hints, as a pure function of the facts.
+ *
+ * Split out from `diagnoseAccess` so the branches are testable: a test cannot make the machine run as
+ * root, but it can hand this function the facts of a root-run panel and assert that the advice changes.
+ * That matters, because the wrong branch here is exactly what shipped once already.
+ */
+export function hintsForFacts(facts: DockerAccess, detail: string): string[] {
   const permission = /permission denied|access denied|not authorized/i.test(detail);
-  const missingSocket = /no such file or directory|cannot connect|connection refused/i.test(detail);
+  const missingSocket = /no such file or directory|cannot connect|connection refused|is the docker daemon running/i.test(detail);
   const hints: string[] = [];
-  const facts = collectAccessFacts(hints);
+  const elevated = facts.elevated;
+  const who = elevated ? `the panel runs as ${facts.user} (${elevatedLabel(facts)})` : `the panel runs as "${facts.user}" (uid ${facts.uid})`;
 
   if (permission) {
-    if (facts.uid === 0) {
+    if (elevated) {
       hints.push(
-        `The panel runs as root and was still refused, so the daemon is probably listening somewhere else (rootless Docker or Podman). `
-        + `Point the panel at it: RSLMC_DOCKER_HOST=${facts.alternatives[0] ?? "unix:///run/user/<uid>/docker.sock"}.`,
-      );
-    } else {
-      hints.push(
-        `The panel runs as "${facts.user}" (uid ${facts.uid}) but ${facts.endpoint} is ${facts.socketMode ?? "not readable"}`
-        + `${facts.socketGroup ? ` owned by group "${facts.socketGroup}"` : ""}. `
-        + `Add that account to the docker group — sudo usermod -aG docker ${facts.user} — then restart the panel: `
-        + "a running process does not pick up a new group, which is why it keeps failing after the usual fix.",
-      );
-      hints.push(
-        `Alternatively let the panel use sudo for docker: add "rslmc ALL=(root) NOPASSWD: /usr/bin/docker" to sudoers and set RSLMC_DOCKER_SUDO=1.`,
+        `This is not a group problem: ${who}, which can open any socket on the machine, and ${facts.endpoint} still refused the request. `
+        + "That points at a daemon that belongs to a different account (rootless Docker, Podman) or at a security module blocking it.",
       );
       if (facts.alternatives.length > 0) {
-        hints.push(`Rootless/Podman socket found at ${facts.alternatives[0]} — set RSLMC_DOCKER_HOST=unix://${facts.alternatives[0]} instead.`);
+        hints.push(`A socket exists at ${facts.alternatives[0]} — enter it under "Docker endpoint" below and press Test & save (or export RSLMC_DOCKER_HOST=${facts.alternatives[0]}) and the card unlocks.`);
+      } else {
+        hints.push(
+          "Run `docker context ls` and `echo $DOCKER_HOST` in the same shell where `docker pull` works, then enter that endpoint below. "
+          + "If they print nothing, the shell is using the same default socket — check SELinux with `ausearch -m avc -ts recent`.",
+        );
       }
+      hints.push("Named contexts are honoured too: put the context name (for example `default`) in the same field if that is what your shell uses.");
+    } else if (facts.groupMissing) {
+      hints.push(
+        `${who} is not in the ${facts.socketGroup ? `"${facts.socketGroup}"` : "socket's"} group and ${facts.endpoint} is ${facts.socketMode ?? "not readable"}. `
+        + `Add the account — sudo usermod -aG docker ${facts.user} — then restart the panel: a running process keeps its old groups, `
+        + "which is why it still fails after the usual fix.",
+      );
+      hints.push("Or let the panel use sudo for docker: \"rslmc ALL=(root) NOPASSWD: /usr/bin/docker\" in sudoers, then RSLMC_DOCKER_SUDO=1.");
+      if (facts.alternatives.length > 0) {
+        hints.push(`Rootless/Podman socket found at ${facts.alternatives[0]} — enter it under "Docker endpoint" below (or set RSLMC_DOCKER_HOST).`);
+      }
+    } else {
+      hints.push(
+        `${who} should be able to open ${facts.endpoint} (${facts.socketMode ?? "mode unknown"}, group ${facts.socketGroup ?? "unknown"}), `
+        + `so the refusal is coming from the daemon side. Check \`docker info\` output: ${firstLine(detail) || "no detail"}.`,
+      );
     }
   } else if (missingSocket) {
-    hints.push(`Nothing is listening on ${facts.endpoint}. Start the daemon: systemctl start docker (Linux) or open Docker Desktop.`);
+    if (facts.inContainer) {
+      /*
+       * The panel is a container. Its own `/var/run/docker.sock` does not exist unless the host socket
+       * was mounted in, and "start the daemon" cannot fix that no matter how many times it is typed.
+       */
+      hints.push(
+        `The panel appears to be running inside a container and ${facts.endpoint} does not exist in it. `
+        + "Mount the host socket into the panel: add -v /var/run/docker.sock:/var/run/docker.sock to how this panel is started (docker run / compose volumes).",
+      );
+      hints.push("Then restart the panel container; the socket appears at the same path and the probe will pick it up.");
+    } else {
+      hints.push(`Nothing is answering on ${facts.endpoint}. Start the daemon: systemctl start docker (Linux) or open Docker Desktop (Windows/macOS).`);
+      if (elevated) {
+        hints.push("If your shell reaches Docker but the panel does not, the two are using different endpoints — compare `docker context ls` with the endpoint above and enter the difference below.");
+      }
+    }
     if (facts.alternatives.length > 0) {
-      hints.push(`A socket does exist at ${facts.alternatives[0]} — set RSLMC_DOCKER_HOST=unix://${facts.alternatives[0]}.`);
+      hints.push(`A socket does exist at ${facts.alternatives[0]} — enter it under "Docker endpoint" and press Test & save.`);
     }
   } else {
-    hints.push(`Check "docker info" as the "${facts.user}" account; the CLI reported: ${firstLine(detail) || "no detail"}.`);
+    hints.push(`The CLI reported: ${firstLine(detail) || "no detail"}. Run the exact command below as ${facts.user} and compare the output.`);
+  }
+
+  /* A context the CLI resolves on its own is invisible from the socket path and is a classic mismatch. */
+  if (facts.environment.cliContext && !facts.environment.dockerHost) {
+    hints.push(
+      `The CLI on this machine has the context "${facts.environment.cliContext}" set in ~/.docker/config.json, which overrides the default socket. `
+      + "If that context points somewhere this panel cannot reach, name the right one in the endpoint field.",
+    );
+  }
+  return hints;
+}
+
+function elevatedLabel(facts: DockerAccess): string {
+  return facts.platformLabel === "win32" ? "Administrator" : `uid ${facts.uid}`;
+}
+
+/** The panel could not execute a CLI at all — say which paths were tried, not "not installed". */
+export function diagnoseMissingCli(): DockerAccess {
+  const facts = collectAccessFacts();
+  const existing = facts.binaries.filter((entry) => entry.exists).map((entry) => entry.path);
+  const configured = process.env.RSLMC_DOCKER_BIN?.trim() || "";
+  /*
+   * An explicit override that does not run is the operator's own setting failing, and saying "a CLI
+   * exists elsewhere" would be true but not the problem. The override is named first.
+   */
+  const hints = [
+    configured && !existing.includes(configured)
+      ? `RSLMC_DOCKER_BIN is set to ${configured}, which the panel cannot execute. Fix that path or unset it so the panel searches normally.`
+      : existing.length > 0
+        ? `A CLI exists at ${existing[0]} but could not be executed from the panel. Point the panel at it: RSLMC_DOCKER_BIN=${existing[0]}.`
+        : "No Docker CLI was found in the paths the panel searched. Install Docker Engine (Linux) or Docker Desktop (Windows/macOS).",
+    `The panel's PATH is ${facts.environment.path || "(empty)"} — a shell usually has more than a service. `
+    + "If `which docker` works for you, enter that absolute path as the CLI in the Docker settings below.",
+  ];
+  if (facts.environment.binEnv) {
+    hints.push(`RSLMC_DOCKER_BIN is exported as ${facts.environment.binEnv}; it outranks anything saved in the panel, so fix it there or unset it.`);
+  }
+  if (facts.environment.dockerHost) {
+    hints.push(`DOCKER_HOST is set to ${facts.environment.dockerHost} for the panel; the endpoint shown below was taken from it.`);
   }
   return { ...facts, hints };
 }
@@ -357,9 +584,10 @@ export function diagnoseAccess(detail: string): DockerAccess {
  * groups the panel actually holds, which is the whole question. Comparing a socket's group against
  * `process.getgid()` (the primary group only) reports "not in the docker group" for somebody who is.
  */
-function collectAccessFacts(_hints: string[]): DockerAccess {
+function collectAccessFacts(): DockerAccess {
   const endpoint = dockerEndpoint();
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const elevated = panelIsElevated();
 
   let user = "unknown";
   try {
@@ -398,6 +626,7 @@ function collectAccessFacts(_hints: string[]): DockerAccess {
     `/run/user/${uid ?? 0}/podman/podman.sock`,
     "/run/podman/podman.sock",
     "/run/docker.sock",
+    "/var/run/docker.sock",
   ]) {
     if (candidate === endpoint.replace(/^unix:\/\//, "")) continue;
     try {
@@ -419,15 +648,66 @@ function collectAccessFacts(_hints: string[]): DockerAccess {
   return {
     user,
     uid,
+    elevated,
+    platformLabel: process.platform,
     groups: [...new Set(groupIds.map((gid) => groupNameFor(gid)))],
     endpoint,
+    endpointSource: dockerEndpointSource(),
     socketExists: socketExists && socketIsSocket,
     socketMode,
     socketGroup,
     groupMissing,
     alternatives,
+    inContainer: detectContainer(),
+    environment: {
+      platform: process.platform,
+      path: process.env.PATH ?? "",
+      home: process.env.HOME ?? process.env.USERPROFILE ?? null,
+      dockerHost: process.env.DOCKER_HOST?.trim() || null,
+      dockerContext: process.env.DOCKER_CONTEXT?.trim() || null,
+      binEnv: process.env.RSLMC_DOCKER_BIN?.trim() || null,
+      cliContext: currentCliContext(),
+    },
+    binaries: dockerCandidates()
+      .filter((candidate) => candidate.includes("/") || candidate.includes("\\"))
+      .map((candidate) => ({ path: candidate, exists: existsSync(candidate) })),
+    evidence: null,
     hints: [],
   };
+}
+
+/** True when this process looks like it lives inside a container rather than on the host. */
+export function detectContainer(): boolean {
+  if (process.env.container) return true;
+  if (existsSync("/.dockerenv")) return true;
+  try {
+    const cgroup = readFileSync("/proc/1/cgroup", "utf8");
+    if (/(docker|kubepods|lxc|containerd)/.test(cgroup)) return true;
+  } catch { /* not Linux, or no access */ }
+  try {
+    const mounts = readFileSync("/proc/self/mountinfo", "utf8");
+    if (/\/docker\/containers|overlay \/ /.test(mounts)) return true;
+  } catch { /* ignore */ }
+  return false;
+}
+
+/**
+ * The context the CLI would resolve by itself.
+ *
+ * `~/.docker/config.json` can pin a context, and a context overrides the socket path entirely — the
+ * single least visible way for "docker works in my shell" to be true while the panel is refused.
+ */
+export function currentCliContext(): string | null {
+  const home = process.env.HOME ?? process.env.USERPROFILE;
+  if (!home) return null;
+  const file = `${home}/.docker/config.json`;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const context = parsed.currentContext;
+    return typeof context === "string" && context.trim() ? context.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The groups this process really holds — supplementary ones included. */

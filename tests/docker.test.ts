@@ -86,7 +86,11 @@ describe("the daemon probe tells the truth", () => {
     try {
       const info = docker.probeDocker(true);
       expect(info.available).toBe(false);
-      expect(String(info.reason)).toContain("Docker CLI was not found");
+      // The wording changed on purpose: "not found" was wrong for a snap install the panel's PATH cannot
+      // see. What is true in every case is that the panel could not execute it.
+      expect(String(info.reason)).toContain("could not be executed");
+      // And it names the override that is failing, instead of blaming the machine.
+      expect(String(info.reason)).toContain("/nonexistent/rslmc-no-docker");
     } finally {
       if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
       else process.env.RSLMC_DOCKER_BIN = previous;
@@ -273,4 +277,170 @@ describe("access diagnosis", () => {
     }
     expect(docker.dockerHostArgs()).toEqual([]);
   });
+});
+
+/*
+ * "The panel always runs as root."
+ *
+ * That correction exposed the shape of the bug: the first fix assumed the panel was unprivileged, so a
+ * root-run panel was told to join a group it does not need and could not act on. Root can open a 0660
+ * socket, so a refusal means something else entirely — a different endpoint (rootless, Podman, a CLI
+ * context), a socket that was never mounted into the panel's own container, or a security module. The
+ * branches are asserted here with constructed facts, because a test cannot become root.
+ */
+describe("diagnosis for an already-privileged panel", () => {
+  const facts = (over: Partial<any> = {}): any => ({
+    user: "root",
+    uid: 0,
+    elevated: true,
+    platformLabel: "linux",
+    groups: ["root"],
+    endpoint: "unix:///var/run/docker.sock",
+    endpointSource: "default",
+    socketExists: true,
+    socketMode: "mode 660",
+    socketGroup: "docker",
+    groupMissing: false,
+    alternatives: [],
+    inContainer: false,
+    environment: {
+      platform: "linux", path: "/usr/local/sbin:/usr/bin", home: "/root",
+      dockerHost: null, dockerContext: null, binEnv: null, cliContext: null,
+    },
+    binaries: [{ path: "/usr/bin/docker", exists: true }],
+    evidence: null,
+    hints: [],
+    ...over,
+  });
+
+  test("a refusal is never blamed on group membership", () => {
+    const hints = docker.hintsForFacts(facts(), "permission denied while trying to connect to the Docker daemon socket").join(" ");
+    expect(hints).toMatch(/not a group problem/);
+    expect(hints).not.toMatch(/usermod/);
+    // It must name the two things that are actually left, and how to compare with the working shell.
+    expect(hints).toMatch(/rootless|Podman/);
+    expect(hints).toMatch(/docker context ls/);
+  });
+
+  test("an alternative socket is offered as a concrete endpoint, not as trivia", () => {
+    const hints = docker.hintsForFacts(
+      facts({ alternatives: ["/run/user/1000/docker.sock"] }),
+      "permission denied while trying to connect to the Docker daemon socket",
+    ).join(" ");
+    expect(hints).toContain("/run/user/1000/docker.sock");
+    expect(hints).toMatch(/Docker endpoint/);
+  });
+
+  test("root inside a container is told to mount the socket, not to start a daemon", () => {
+    const hints = docker.hintsForFacts(
+      facts({ inContainer: true, socketExists: false, socketMode: null, socketGroup: null }),
+      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+    ).join(" ");
+    expect(hints).toMatch(/inside a container/);
+    expect(hints).toMatch(/docker\.sock:\/var\/run\/docker\.sock/);
+    expect(hints).not.toMatch(/^Nothing is answering/);
+  });
+
+  test("the CLI context is called out, because it overrides the socket invisibly", () => {
+    const hints = docker.hintsForFacts(
+      facts({ environment: { ...facts().environment, cliContext: "desktop-linux" } }),
+      "permission denied while trying to connect to the Docker daemon socket",
+    ).join(" ");
+    expect(hints).toContain("desktop-linux");
+    expect(hints).toMatch(/config\.json/);
+  });
+
+  test("an unprivileged panel still gets the group advice, restart included", () => {
+    const hints = docker.hintsForFacts(
+      facts({ user: "user", uid: 1000, elevated: false, groups: ["sudo", "user"], groupMissing: true }),
+      "permission denied while trying to connect to the Docker daemon socket",
+    ).join(" ");
+    expect(hints).toMatch(/usermod -aG docker user/);
+    expect(hints).toMatch(/restart/);
+  });
+});
+
+describe("the endpoint the panel really uses", () => {
+  test("a saved endpoint is used, and reported as its own source", () => {
+    try {
+      docker.setDockerConfigOverride({ host: "unix:///run/podman/podman.sock", bin: null });
+      expect(docker.dockerEndpoint()).toBe("unix:///run/podman/podman.sock");
+      expect(docker.dockerEndpointSource()).toBe("panel setting");
+      // The bug this pins: dockerHostArgs() existed, was tested, and was never applied to any command,
+      // so RSLMC_DOCKER_HOST changed the label in the UI and nothing else.
+      expect(docker.dockerHostArgs()).toEqual(["-H", "unix:///run/podman/podman.sock"]);
+    } finally {
+      docker.setDockerConfigOverride(null);
+    }
+  });
+
+  test("RSLMC_DOCKER_HOST still beats the saved value", () => {
+    const previousHost = process.env.RSLMC_DOCKER_HOST;
+    try {
+      docker.setDockerConfigOverride({ host: "unix:///saved.sock", bin: null });
+      process.env.RSLMC_DOCKER_HOST = "unix:///from-env.sock";
+      expect(docker.dockerEndpoint()).toBe("unix:///from-env.sock");
+      expect(docker.dockerEndpointSource()).toBe("RSLMC_DOCKER_HOST");
+    } finally {
+      docker.setDockerConfigOverride(null);
+      if (previousHost === undefined) delete process.env.RSLMC_DOCKER_HOST;
+      else process.env.RSLMC_DOCKER_HOST = previousHost;
+    }
+  });
+
+  test("the endpoint reaches the actual command line, and is quoted for the operator", () => {
+    const path = join(tmpdir(), `rslmc-fake-docker-argv-${Math.random().toString(36).slice(2)}.sh`);
+    writeFileSync(path, '#!/bin/sh\necho "argv: $@" >&2\nexit 1\n', { mode: 0o755 });
+    const previous = process.env.RSLMC_DOCKER_BIN;
+    process.env.RSLMC_DOCKER_BIN = path;
+    try {
+      const info = docker.probeDocker(true);
+      expect(info.available).toBe(false);
+      const evidence = info.access!.evidence;
+      expect(evidence).toBeTruthy();
+      // The evidence is the real argv: binary, any host override, then the subcommand.
+      expect(evidence!.command).toContain(path);
+      expect(evidence!.command).toContain("info");
+      expect(evidence!.stderr).toContain("argv:");
+      expect(evidence!.exitCode).toBe(1);
+    } finally {
+      if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
+      else process.env.RSLMC_DOCKER_BIN = previous;
+      docker.probeDocker(true);
+    }
+  }, 60_000);
+
+  test("environment the CLI would inherit is reported, not hidden", () => {
+    const previous = process.env.DOCKER_CONTEXT;
+    process.env.DOCKER_CONTEXT = "desktop-linux";
+    try {
+      const access = docker.diagnoseAccess("cannot connect to the Docker daemon");
+      expect(access.environment.dockerContext).toBe("desktop-linux");
+      expect(access.elevated).toBe(typeof process.getuid === "function" ? process.getuid() === 0 : access.elevated);
+      expect(Array.isArray(access.binaries)).toBe(true);
+      expect(access.binaries.every((entry) => typeof entry.exists === "boolean")).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.DOCKER_CONTEXT;
+      else process.env.DOCKER_CONTEXT = previous;
+    }
+  });
+
+  test("a CLI that cannot be executed lists the paths that were searched", () => {
+    const previous = process.env.RSLMC_DOCKER_BIN;
+    process.env.RSLMC_DOCKER_BIN = "/nonexistent/rslmc-test-docker";
+    try {
+      const info = docker.probeDocker(true);
+      expect(info.available).toBe(false);
+      const access = info.access!;
+      const hints = access.hints.join(" ");
+      expect(hints).toMatch(/PATH/);
+      expect(access.binaries.length).toBeGreaterThan(0);
+      // A snap install must be considered, because a service's PATH does not include /snap/bin.
+      expect(access.binaries.some((entry) => entry.path.includes("/snap/bin"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.RSLMC_DOCKER_BIN;
+      else process.env.RSLMC_DOCKER_BIN = previous;
+      docker.probeDocker(true);
+    }
+  }, 60_000);
 });

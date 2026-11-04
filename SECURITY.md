@@ -258,7 +258,7 @@ the *new* code — which turned out to be two bugs, not one.
 
 ---
 
-## 1i. Docker runtime (2026.11.05.1)
+## 1i. Docker runtime (2026.11.04.4, diagnosis 2026.11.04.5)
 
 A server can now run inside a Docker container instead of directly on the host. The threat model
 changes, so it is written down here rather than left to the code.
@@ -298,6 +298,26 @@ would hang a probe). It is opt-in and the sudoers entry should name the docker b
 panel never asks for root for anything else. `RSLMC_DOCKER_HOST` is honoured because the default socket
 is not the only real endpoint (rootless Docker, Podman, TCP proxy) — without it the panel would insist on
 `/var/run/docker.sock` while the operator's own CLI talks elsewhere.
+
+**The endpoint is a privileged setting, so it is treated as one.** `POST /api/panel/docker/config`
+requires `system.manage` (administrators only), a CSRF token, and a scheme Docker actually speaks —
+`unix://`, `tcp://`, `http(s)://`, `npipe://`, `ssh://`, `fd://` or a bare context name; `file://` and
+anything else is refused with `bad_endpoint` before it reaches a command line. The value decides *which
+daemon the panel obeys*, so a plain `User` must never be able to set it (pentest `upd.14`–`upd.18` pin
+that down). It is **only stored after a successful probe**: a value that cannot reach a daemon is
+rejected and the previous configuration is left untouched, which also means the panel cannot be locked
+into an unreachable endpoint by a typo. Precedence is `RSLMC_DOCKER_HOST` > saved setting > `DOCKER_HOST`
+> platform default, and the source is always reported in the UI, so an override inherited from a systemd
+unit cannot masquerade as the default.
+
+**Diagnosis, not a script.** The reason shown for an unreachable daemon is derived from the panel's own
+facts: elevation (`uid 0` / Administrator), the namespace it is in (`/.dockerenv`, `/proc/1/cgroup`,
+mountinfo), the endpoint and the layer that chose it, the socket's mode/group compared against the
+process's *supplementary* groups, `~/.docker/config.json`'s `currentContext`, and the probe's raw output.
+Group advice is never shown to a panel that is already root, because it cannot act on it — that
+mismatch was a real bug report. The environment the CLI inherits (`PATH`, `DOCKER_HOST`,
+`DOCKER_CONTEXT`, `RSLMC_DOCKER_BIN`) is shown so a shell/service disagreement is visible instead of
+mysterious.
 
 **Tests.** `tests/docker.test.ts` asserts the real command line (memory, swap, cpus, bind mount, path
 translation, quota only when supported, reference validation). `tests/docker-live.test.ts` starts a
@@ -370,8 +390,8 @@ real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the dae
 ```bash
 cd rslmc
 bun install
-bun test                              # 417 unit/integration tests (40 files)
-bun run tests/security/pentest.ts     # 146 adversarial checks against a throwaway instance
+bun test                              # 427 unit/integration tests (40 files)
+bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape
 ```
 

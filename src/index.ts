@@ -3,6 +3,7 @@ import { getDb, closeDb } from "./database";
 import { bootstrap, needsSetup } from "./services/bootstrap";
 import { buildFrontend, ensureFrontendBuilt, staticFile } from "./services/frontend-build";
 import { handleApiRequest, describeRoutes } from "./api";
+import { loadDockerConfig } from "./api/panel-routes";
 import { upgradeWebSocket, websocketHandlers, startWsHeartbeat, wsStats } from "./api/ws";
 import { startScheduler, stopScheduler } from "./services/schedules";
 import { adoptRelays, handOffForPanelRestart, reconcileContainers, reconcileForeignProcesses, runningServerCount, shutdownAll, waitForIdle } from "./processes/manager";
@@ -25,6 +26,9 @@ async function main(): Promise<void> {
   if (DATA_LOCATION.note) console.warn(`[rslmc] ${DATA_LOCATION.note}`);
   loadAppSecret();
   getDb();
+  // A Docker endpoint saved from the panel must be in force before the first probe, otherwise the
+  // wizard would report "not available" for one page load after a restart and look broken.
+  loadDockerConfig();
   // Before bootstrap(): its reconcile marks stale 'installing' rows as offline, which would hide
   // the unfinished records that pruneGhostServers() is meant to remove.
   pruneGhostServers();
@@ -32,9 +36,20 @@ async function main(): Promise<void> {
   // look like an existing one in the startup banner.
   const freshInstall = needsSetup();
   await bootstrap();
-  const build = await buildFrontend();
+  /*
+   * A failed frontend build must not stop the panel from starting. It happened for real: a panel run
+   * once as root left root-owned files in public/dist, the next non-root boot could not rewrite them,
+   * and the thrown permission error took the whole process down — taking every running server with it.
+   * The API is still correct without a fresh bundle, so this is a warning, not a fatal error.
+   */
+  let build: { ok: boolean; durationMs: number; error?: string } = { ok: false, durationMs: 0 };
+  try {
+    build = await buildFrontend();
+  } catch (error) {
+    build = { ok: false, durationMs: 0, error: error instanceof Error ? error.message : String(error) };
+  }
   if (!build.ok) {
-    console.error("[rslmc] The frontend failed to build — the panel UI will not be available until it is fixed.");
+    console.error(`[rslmc] The frontend failed to build — the panel UI will not be available until it is fixed.${build.error ? ` (${build.error})` : ""}`);
   }
 
   /*
