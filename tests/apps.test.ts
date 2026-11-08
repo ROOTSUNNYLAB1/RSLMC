@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -297,6 +297,34 @@ describe("stopping an app server uses a signal, not a console command", () => {
     const appTimeout = 15_000;
     const minecraftTimeout = 45_000;
     expect(appTimeout).toBeLessThan(minecraftTimeout);
+  });
+});
+
+describe("the starter file a new app server runs", () => {
+  /*
+   * The starter is what an operator's first start executes, so it has to demonstrate the two things they
+   * cannot guess from a Minecraft panel: console input arrives on stdin, and Stop is SIGTERM.
+   */
+  test("both starters handle SIGTERM and echo stdin", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rslmc-scaffold-"));
+    const { installAppScaffold } = await import("../src/apps/interpreters");
+    const node = await installAppScaffold("node", "20.20.2", join(dir, "node"));
+    const python = await installAppScaffold("python", "3.11.18", join(dir, "python"));
+    const nodeBody = readFileSync(join(dir, "node", node.entryFile), "utf8");
+    const pythonBody = readFileSync(join(dir, "python", python.entryFile), "utf8");
+
+    expect(node.entryFile).toBe("index.js");
+    expect(python.entryFile).toBe("main.py");
+    expect(nodeBody).toContain("SIGTERM");
+    expect(pythonBody).toContain("SIGTERM");
+    expect(nodeBody).toContain("process.stdin");
+    expect(pythonBody).toContain("sys.stdin");
+    // Unbuffered output, or the console looks frozen on a Python server.
+    expect(pythonBody).toContain("flush=True");
+    // The Minecraft flag must never appear in a starter.
+    expect(nodeBody).not.toContain("nogui");
+    expect(pythonBody).not.toContain("nogui");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
