@@ -53,6 +53,25 @@ async function main(): Promise<void> {
   }
 
   /*
+   * Warm the Python/Node version lists in the background.
+   *
+   * Listing them is a handful of upstream requests (nodejs.org's index plus the release assets of a few
+   * python-build-standalone tags) and takes a few seconds cold. Doing it here means the create wizard's
+   * software step already has the lists when an operator opens it, instead of showing "loading…" for the
+   * first five seconds after a panel start. A failure is not fatal: the wizard asks again and reports it.
+   */
+  void (async () => {
+    try {
+      const { describeApps } = await import("./apps/catalog");
+      const apps = await describeApps();
+      const summary = apps.map((app) => `${app.name}: ${app.error ? "unavailable" : `${app.versions.length} versions`}`).join(", ");
+      console.log(`[rslmc] runtime catalogue warmed — ${summary}`);
+    } catch (error) {
+      console.warn(`[rslmc] runtime catalogue could not be warmed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })();
+
+  /*
    * Servers survive a panel restart inside their relays. Reconnect to them *before* the orphan scan,
    * so they come back as fully managed (console and all) instead of merely "running but unmanaged".
    */
