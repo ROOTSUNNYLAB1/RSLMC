@@ -300,6 +300,15 @@ describe("stopping an app server uses a signal, not a console command", () => {
   });
 });
 
+describe("how an app version is written to a human", () => {
+  test("Python does not repeat its major version, Node.js keeps its name", async () => {
+    const { appDisplayName } = await import("../src/apps/catalog");
+    // "Python 3" is the family; the version is already 3.x, so "Python 3 3.11.18" was the bug.
+    expect(appDisplayName("python", "3.11.18")).toBe("Python 3.11.18");
+    expect(appDisplayName("node", "20.20.2")).toBe("Node.js 20.20.2");
+  });
+});
+
 describe("the starter file a new app server runs", () => {
   /*
    * The starter is what an operator's first start executes, so it has to demonstrate the two things they

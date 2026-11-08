@@ -6,7 +6,7 @@ import { Banner, Button, Card, ConfirmDialog, Field, Input, Loading, PageHeader,
 import { api, errorMessage } from "../lib/api";
 import { useSession, useToast } from "../lib/app";
 import { useRouter } from "../lib/router";
-import { cpuAllocationLabel, formatDateTime } from "../lib/format";
+import { appVersionLabel, cpuAllocationLabel, formatDateTime } from "../lib/format";
 
 interface RuntimeEntry { id: number; major: number; version: string; vendor: string; status: string }
 
@@ -655,7 +655,7 @@ function AppStartupPage({ server }: { server: ServerSummary }) {
 
         <div className="stack">
           <Card title={app.installed ? "Interpreter ready" : "Interpreter missing"} icon={<Boxes size={12} />}>
-            <Banner tone={app.installed ? "success" : "warning"} title={app.installed ? `${app.name} ${app.version} is installed` : `${app.name} ${app.version} is not on this host`}>
+            <Banner tone={app.installed ? "success" : "warning"} title={app.installed ? `${appVersionLabel(app)} is installed` : `${appVersionLabel(app)} is not on this host`}>
               {app.installed
                 ? <>Installed at <span className="mono">{app.interpreterPath}</span>. Shared with every server on this machine that uses {app.version} — it is installed once, not per server.</>
                 : "Starting the server installs it automatically: the archive is downloaded from the official source, its SHA-256 is verified, and it is unpacked once for every server that uses this version."}

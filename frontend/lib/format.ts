@@ -95,3 +95,11 @@ export function cpuAllocationLabel(percent: number): string {
   const cores = percent / 100;
   return `${percent}% · ${cores.toFixed(cores % 1 === 0 ? 0 : 1)} core-equivalent${cores === 1 ? "" : "s"}`;
 }
+
+/**
+ * "Python 3" + "3.11.18" reads as "Python 3 3.11.18" — the family name repeats the major version.
+ * Python versions are quoted in full ("Python 3.11.18"), so drop the family's own digit.
+ */
+export function appVersionLabel(app: { family: string; name: string; version: string }): string {
+  return app.family === "python" ? `Python ${app.version}` : `${app.name} ${app.version}`;
+}

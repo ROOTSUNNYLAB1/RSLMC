@@ -1,4 +1,4 @@
-import { APP_FAMILIES, type AppFamily } from "./catalog";
+import { APP_FAMILIES, appDisplayName, type AppFamily } from "./catalog";
 
 /*
  * Turning a Python/Node server into a command line.
@@ -127,5 +127,5 @@ export function validateEntryFile(value: string, family: AppFamily): EntryFilePr
 /** One-line description of what the process is, for the console's start banner. */
 export function appLaunchSummary(family: AppFamily, version: string, entryFile: string): string {
   const definition = APP_FAMILIES[family];
-  return `${definition.name} ${version} — ${definition.binary} ${normaliseEntryFile(entryFile, family)}`;
+  return `${appDisplayName(family, version)} — ${definition.binary} ${normaliseEntryFile(entryFile, family)}`;
 }

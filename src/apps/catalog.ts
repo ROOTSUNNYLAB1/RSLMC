@@ -63,6 +63,17 @@ export const APP_FAMILIES: Record<AppFamily, AppDefinition> = {
   },
 };
 
+/**
+ * How a family + version should be written to a human: "Python 3.11.18", "Node.js 20.20.2".
+ *
+ * `name` is "Python 3" (the family), and a Python version already begins with "3.", so joining the two
+ * produced "Python 3 3.11.18" in the console and the install progress. The version is the identifier
+ * people quote, so the family's own digit is dropped for Python.
+ */
+export function appDisplayName(family: AppFamily, version: string): string {
+  return family === "python" ? `Python ${version}` : `${APP_FAMILIES[family].name} ${version}`;
+}
+
 export function isAppSoftware(id: string): id is AppFamily {
   return id === "python" || id === "node";
 }

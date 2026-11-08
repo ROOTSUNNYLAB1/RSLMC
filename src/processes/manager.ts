@@ -15,7 +15,7 @@ import {
   probeDocker, pullImage, removeContainer,
 } from "../runtime/docker";
 import { appImageFor, imageForMajor, yolksAllTags } from "../runtime/images";
-import { APP_FAMILIES, isAppSoftware, type AppFamily } from "../apps/catalog";
+import { APP_FAMILIES, appDisplayName, isAppSoftware, type AppFamily } from "../apps/catalog";
 import { ensureInterpreter, installAppScaffold, interpreterExecutable, interpreterDirectory } from "../apps/interpreters";
 import { appCommand, appContainerBinary, appEnvironment, appLaunchSummary, normaliseEntryFile } from "../apps/launch";
 import { panelCanSwitchUser, ensureServiceAccount, handOverDirectory, serviceAccountState, serviceSpawnIdentity } from "../runtime/nonroot";
@@ -708,7 +708,7 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
        * standalone CPython for it would be wasted bandwidth on every fresh machine.
        */
       if (server.runtime !== "docker" && !interpreterExecutable(family, server.mc_version)) {
-        systemLine(serverId, `${definition.name} ${server.mc_version} is not installed on this machine — installing it now…`);
+        systemLine(serverId, `${appDisplayName(family, server.mc_version)} is not installed on this machine — installing it now…`);
         await ensureInterpreter(family, server.mc_version, (stage, received, total) => {
           if (total > 0) systemLine(serverId, `${stage} (${Math.round((received / total) * 100)}%)`);
           else systemLine(serverId, stage);

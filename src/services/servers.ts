@@ -24,7 +24,7 @@ import { ensureRuntime, resolveExecutable, runtimeInfo } from "../java/manager";
 import { notify } from "./notifications";
 import { containerNameFor, probeDocker, removeContainer } from "../runtime/docker";
 import { appImageFor, imageForMajor, yolksAllTags, yolksJavaTags } from "../runtime/images";
-import { APP_FAMILIES, isAppSoftware, type AppFamily } from "../apps/catalog";
+import { APP_FAMILIES, appDisplayName, isAppSoftware, type AppFamily } from "../apps/catalog";
 import { ensureInterpreter, installAppScaffold, interpreterExecutable } from "../apps/interpreters";
 import { normaliseEntryFile, validateEntryFile } from "../apps/launch";
 import { panelCanSwitchUser, requiresIsolation, serviceAccountState } from "../runtime/nonroot";
@@ -743,7 +743,7 @@ async function runAppInstall(
     });
   };
   try {
-    publish(`Preparing ${definition.name} ${version}`, 0, 0);
+    publish(`Preparing ${appDisplayName(family, version)}`, 0, 0);
     const interpreter = await ensureInterpreter(family, version, (stage, received, total) => publish(stage, received, total));
 
     publish(`Writing ${entryFile}`, 0, 0);
@@ -778,14 +778,14 @@ async function runAppInstall(
         software_version = ?, java_runtime_id = NULL, install_log = NULL WHERE id = ?`,
       [softwareVersion, serverId],
     );
-    publish(`${definition.name} ${version} ready`, 1, 1, true);
+    publish(`${appDisplayName(family, version)} ready`, 1, 1, true);
     recordActivity({
       type: "server.installed", serverId, target: version,
       metadata: { runtime: definition.name, interpreter: interpreter.path, entryFile },
     });
     notify({
       title: `Server installed: ${queryOne<{ name: string }>("SELECT name FROM servers WHERE id = ?", [serverId])?.name}`,
-      body: `${definition.name} ${version} is ready — ${entryFile} will be started when you press Start.`,
+      body: `${appDisplayName(family, version)} is ready — ${entryFile} will be started when you press Start.`,
       severity: "success", kind: "server_installed", link: `/servers/${serverId}/overview`,
     });
   } catch (err) {
