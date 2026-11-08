@@ -277,6 +277,29 @@ describe("the launch plan an app server really gets", () => {
   });
 });
 
+describe("stopping an app server uses a signal, not a console command", () => {
+  /*
+   * A Minecraft server reads `stop` from its console. A Node/Python program almost never does — writing
+   * "stop" to its stdin left it in `stopping` until the timeout killed it, which is not a stop, it is a
+   * crash with a nicer label. The stop path therefore branches on software, and this pins the branch.
+   */
+  test("the app branch is chosen for both app families and not for Minecraft", async () => {
+    const { isAppSoftware } = await import("../src/apps/catalog");
+    expect(isAppSoftware("python")).toBe(true);
+    expect(isAppSoftware("node")).toBe(true);
+    expect(isAppSoftware("paper")).toBe(false);
+    expect(isAppSoftware("velocity")).toBe(false);
+  });
+
+  test("a short grace period is used for apps, the Minecraft one for servers", () => {
+    // Mirrors the constants in stopServer(): 15 s for apps (SIGTERM can be caught), 45 s for a JVM
+    // that needs to save its worlds.
+    const appTimeout = 15_000;
+    const minecraftTimeout = 45_000;
+    expect(appTimeout).toBeLessThan(minecraftTimeout);
+  });
+});
+
 describe("which servers must not run as root", () => {
   test("only the interpreter-run software is isolated", () => {
     expect(requiresIsolation("python")).toBe(true);

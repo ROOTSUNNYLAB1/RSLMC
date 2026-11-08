@@ -1130,6 +1130,22 @@ function handleExit(serverId: number, exitCode: number | null, signalCode: strin
   }
 }
 
+/**
+ * Sends one signal to a pid, reporting whether it worked.
+ *
+ * Kept tiny and explicit so the stop path never has to guess: `process.kill` throws for a pid that is
+ * already gone, and a `false` here is information (the process ended on its own, or it is not ours).
+ */
+function sendSignalToProcess(pid: number, signal: NodeJS.Signals): boolean {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function stopServer(serverId: number, actor = "system", opts: { timeoutMs?: number } = {}): Promise<void> {
   return withLock(serverId, async () => {
     const entry = ensureEntry(serverId);
@@ -1144,12 +1160,32 @@ export async function stopServer(serverId: number, actor = "system", opts: { tim
     }
     if (entry.state.status === "stopping") return;
 
-    const timeoutMs = opts.timeoutMs ?? 45_000;
+    /*
+     * How a server is asked to stop depends on what it is.
+     *
+     * A Minecraft server reads the `stop` command from its console and shuts itself down cleanly. A
+     * Python or Node program has no such protocol — and pip/npm-installed apps rarely read stdin at all,
+     * so writing "stop" left them in `stopping` until the timeout killed them. For those, SIGTERM on the
+     * process is the real "please finish" signal: it can be caught for a clean shutdown, and if it is
+     * ignored the existing escalation still ends the process.
+     */
+    const isApp = isAppSoftware(server.software);
+    const timeoutMs = opts.timeoutMs ?? (isApp ? 15_000 : 45_000);
     entry.stoppingRequested = true;
     entry.state.stoppingAt = Date.now();
     setStatus(serverId, "stopping");
-    systemLine(serverId, "Sending graceful stop command to the server console…");
-    sendCommandRaw(serverId, "stop");
+    if (isApp) {
+      systemLine(serverId, "Sending SIGTERM to the process — app servers stop on the signal, not on a console command.");
+      const pid = entry.state.pid;
+      const signalled = pid ? sendSignalToProcess(pid, "SIGTERM") : false;
+      if (!signalled) {
+        // A relay-owned child is not signalled directly through a pid we hold here; ask the relay.
+        try { entry.relay?.kill("SIGTERM"); } catch { /* the timeout below still applies */ }
+      }
+    } else {
+      systemLine(serverId, "Sending graceful stop command to the server console…");
+      sendCommandRaw(serverId, "stop");
+    }
 
     entry.stopTimer = setTimeout(() => {
       const current = managed.get(serverId);
