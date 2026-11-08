@@ -259,7 +259,11 @@ export function registerServerRoutes(api: Router): void {
         publicPort: input.publicPort ?? null,
         javaMajor: input.javaMajor ?? undefined,
         jvmArgs: input.jvmArgs ?? "",
-        serverArgs: input.serverArgs ?? "nogui",
+        /*
+         * `nogui` is a Minecraft flag. Passing it to a Python or Node program would hand it an argument
+         * it never asked for — and it showed up in the launch line of every app server.
+         */
+        serverArgs: input.serverArgs ?? (isAppSoftware(input.software!) ? "" : "nogui"),
         autoStart: input.autoStart ?? false,
         crashRecovery: input.crashRecovery ?? false,
         acceptEula: input.acceptEula ?? false,

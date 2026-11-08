@@ -133,6 +133,20 @@ describe("the command that is actually run", () => {
       .toEqual(["/data/runtimes/python/3.12.7/bin/python3", "main.py"]);
   });
 
+  test("an app server is not handed Minecraft's `nogui`", () => {
+    // The create route defaults serverArgs to "nogui" for Minecraft; for an app it must stay empty, or
+    // every Python/Node server starts with an argument it never asked for.
+    const plan = buildLaunchPlan({
+      id: 43, uuid: "app-args", name: "Args", node_id: 1, software: "python", mc_version: "3.12.16",
+      memory_mb: 512, cpu_percent: 100, disk_mb: 1024, bind_ip: "127.0.0.1", port: 3001,
+      jvm_args: "", server_args: "", java_runtime_id: null, java_major: 0, rcon_password: null,
+      public_host: null, public_port: null, runtime: "standalone", docker_image: null,
+      docker_disk_quota: 0, entry_file: "main.py", service_user: null,
+    } as any);
+    expect(plan.command).not.toContain("nogui");
+    expect(plan.command.length).toBe(2);
+  });
+
   test("arguments are kept as arguments — never re-split or dropped", () => {
     expect(appCommand({ family: "node", executable: "node", entryFile: "index.js", args: ["--port", "8080", ""] }))
       .toEqual(["node", "index.js", "--port", "8080"]);
