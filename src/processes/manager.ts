@@ -1146,6 +1146,29 @@ function sendSignalToProcess(pid: number, signal: NodeJS.Signals): boolean {
   }
 }
 
+/**
+ * Asks a running server to stop, in the way that software understands.
+ *
+ * This exists because "stop the server" is not one message: a Minecraft server reads the `stop` command
+ * on its console, while an app server has no such protocol and may never read stdin at all. Restart and
+ * panel shutdown used to write `stop` to every server, which an app simply echoed and ignored — the
+ * server then only died on the timeout, so a "graceful" restart was really a crash.
+ */
+async function requestGracefulStop(serverId: number, entry: ManagedProcess, server: { software: string }): Promise<boolean> {
+  if (!isAppSoftware(server.software)) {
+    if (entry.process) sendCommandRaw(serverId, "stop");
+    return true;
+  }
+  const pid = entry.state.pid;
+  const signalled = pid ? sendSignalToProcess(pid, "SIGTERM") : false;
+  if (!signalled) {
+    try {
+      if (entry.relay) { entry.relay.kill("SIGTERM"); return true; }
+    } catch { /* the caller's timeout still applies */ }
+  }
+  return signalled;
+}
+
 export async function stopServer(serverId: number, actor = "system", opts: { timeoutMs?: number } = {}): Promise<void> {
   return withLock(serverId, async () => {
     const entry = ensureEntry(serverId);
@@ -1176,12 +1199,8 @@ export async function stopServer(serverId: number, actor = "system", opts: { tim
     setStatus(serverId, "stopping");
     if (isApp) {
       systemLine(serverId, "Sending SIGTERM to the process — app servers stop on the signal, not on a console command.");
-      const pid = entry.state.pid;
-      const signalled = pid ? sendSignalToProcess(pid, "SIGTERM") : false;
-      if (!signalled) {
-        // A relay-owned child is not signalled directly through a pid we hold here; ask the relay.
-        try { entry.relay?.kill("SIGTERM"); } catch { /* the timeout below still applies */ }
-      }
+      // A relay-owned child is also reachable through the relay, which the helper falls back to.
+      await requestGracefulStop(serverId, entry, server);
     } else {
       systemLine(serverId, "Sending graceful stop command to the server console…");
       sendCommandRaw(serverId, "stop");
@@ -1389,7 +1408,7 @@ export async function restartServer(serverId: number, actor = "system", opts: { 
       const startedAt = Date.now();
       entry.stoppingRequested = true;
       entry.restarting = true;
-      if (entry.process) sendCommandRaw(serverId, "stop");
+      void requestGracefulStop(serverId, entry, server);
       const poll = setInterval(() => {
         const current = managed.get(serverId);
         if (!current?.process) {
@@ -1954,9 +1973,12 @@ export function shutdownAll(): void {
     entry.stoppingRequested = true;
     try {
       if (entry.process) {
+        const server = getServerRow(serverId);
         setStatus(serverId, "stopping");
-        systemLine(serverId, "Panel shutdown requested — sending stop.");
-        sendCommandRaw(serverId, "stop");
+        systemLine(serverId, isAppSoftware(server.software)
+          ? "Panel shutdown requested — sending SIGTERM to the app process."
+          : "Panel shutdown requested — sending stop.");
+        void requestGracefulStop(serverId, entry, server);
         setTimeout(() => killCgroup(serverId), 8000);
       }
     } catch { /* ignore */ }

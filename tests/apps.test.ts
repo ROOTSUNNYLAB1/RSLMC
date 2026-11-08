@@ -300,6 +300,23 @@ describe("stopping an app server uses a signal, not a console command", () => {
   });
 });
 
+describe("every stop path knows the difference between an app and a server", () => {
+  /*
+   * Stop, restart and panel shutdown all used to write `stop` to the console. For an app that is a word
+   * sent to a program that does not read stdin — the process survived and the panel killed it later,
+   * so a "graceful restart" was a crash with a friendlier log line. One helper now decides the message,
+   * and all three paths call it.
+   */
+  test("restart and shutdown go through the shared helper", async () => {
+    const source = await Bun.file(new URL("../src/processes/manager.ts", import.meta.url)).text();
+    const stopHelper = source.slice(source.indexOf("async function requestGracefulStop"));
+    expect(stopHelper.slice(0, 800)).toContain("sendSignalToProcess(pid, \"SIGTERM\")");
+    expect(stopHelper.slice(0, 800)).toContain('sendCommandRaw(serverId, "stop")');
+    // Three call sites: stopServer, restartServer and shutdownAll.
+    expect(source.split("requestGracefulStop(").length - 1).toBeGreaterThanOrEqual(4);
+  });
+});
+
 describe("how an app version is written to a human", () => {
   test("Python does not repeat its major version, Node.js keeps its name", async () => {
     const { appDisplayName } = await import("../src/apps/catalog");
