@@ -597,6 +597,10 @@ console, same file manager, same backups, same schedules.
   (Writing `stop` at it left the server in `stopping` until the timeout force-killed it — a crash with
   a friendlier label.) The console says which signal was sent, and a program that ignores SIGTERM is
   terminated after the grace period with that stated too.
+  This is also why the two kinds of shutdown differ, and the difference is deliberate: **Restart RSLMC**
+  (and *Install update*) hands every server to its relay first, so nothing stops; `SIGTERM`/`Ctrl-C` to
+  the panel — `systemctl stop`, closing the terminal — is an operator saying "shut down", and every
+  server is stopped cleanly before the panel exits.
 * **A starter that teaches the two things that matter.** A new server's `main.py` / `index.js` echoes
   console input back and handles `SIGTERM`, so an operator can see the stdin contract and a clean
   shutdown before replacing it with their own program.
