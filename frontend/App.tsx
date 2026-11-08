@@ -27,6 +27,7 @@ import { CreateServerPage } from "./pages/CreateServer";
 import { AccountPage, NotificationsPage } from "./pages/Account";
 import { AdminDashboardPage, AdminNav, AuditPage, JavaPage, NodesPage, RolesPage, SignInPage, SystemPage, UsersPage } from "./pages/Admin";
 import { AboutPage } from "./pages/About";
+import { AppRuntimesPage } from "./pages/AppRuntimes";
 
 interface SetupStatus {
   needsSetup: boolean;
@@ -67,6 +68,7 @@ const ADMIN_PAGES: Record<string, { label: string; permission: string | string[]
   roles: { label: "Roles", permission: "user.view" },
   signin: { label: "Sign-in", permission: ["system.manage", "user.manage"] },
   java: { label: "Java Runtimes", permission: "java.manage" },
+  runtimes: { label: "App Runtimes", permission: "system.manage" },
   audit: { label: "Audit Log", permission: "audit.view" },
   system: { label: "System", permission: "system.manage" },
   about: { label: "About", permission: ["system.manage", "node.view"] },
@@ -227,6 +229,7 @@ export function App() {
                   : key === "roles" ? <RolesPage />
                     : key === "signin" ? <SignInPage />
                     : key === "java" ? <JavaPage />
+                    : key === "runtimes" ? <AppRuntimesPage />
                       : key === "audit" ? <AuditPage />
                         : key === "about" ? <AboutPage />
                           : <SystemPage />;

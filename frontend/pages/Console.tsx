@@ -75,6 +75,9 @@ export function ConsolePage({ server }: { server: ServerSummary }) {
           live={live}
           connection={connection}
           foreign={foreign}
+          inputPlaceholder={server.app
+            ? `Write to ${server.app.entryFile}'s stdin (Enter to send) — this is not a shell`
+            : undefined}
           height="clamp(320px, calc(100vh - 430px), 540px)"
           canCommand={can("server.command")}
         />

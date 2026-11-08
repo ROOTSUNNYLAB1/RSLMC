@@ -17,6 +17,7 @@ export function AdminNav({ active }: { active: string }) {
     { key: "roles", label: "Roles", permission: "user.view" },
     { key: "signin", label: "Sign-in", permission: ["system.manage", "user.manage"] },
     { key: "java", label: "Java Runtimes", permission: "java.manage" },
+    { key: "runtimes", label: "App Runtimes", permission: "system.manage" },
     { key: "audit", label: "Audit Log", permission: "audit.view" },
     { key: "system", label: "System", permission: "system.manage" },
     { key: "about", label: "About", permission: ["system.manage", "node.view"] },

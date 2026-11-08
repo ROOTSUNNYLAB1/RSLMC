@@ -54,6 +54,7 @@ const ConsoleRow = memo(function ConsoleRow({ line, search }: { line: ConsoleLin
 
 export function ConsolePanel({
   serverId, lines, live, connection = "open", foreign = false, height = 300, showInput = true, canCommand, onCopyState, compact = false,
+  inputPlaceholder,
 }: {
   serverId: number;
   lines: ConsoleLine[];
@@ -65,6 +66,11 @@ export function ConsolePanel({
   height?: number | string;
   showInput?: boolean;
   canCommand: boolean;
+  /**
+   * Overrides the hint inside the input. Used for Python/Node servers, where the input writes to the
+   * program's own stdin — calling that "a command" would promise a shell this console does not have.
+   */
+  inputPlaceholder?: string;
   onCopyState?: (count: number) => void;
   compact?: boolean;
 }) {
@@ -239,7 +245,9 @@ export function ConsolePanel({
             className="console-input"
             placeholder={foreign
               ? "Adopted process — RSLMC has no console pipe for it"
-              : canCommand ? (live ? "Type a command…" : "Server is offline — commands are unavailable") : "You do not have permission to run commands"}
+              : !canCommand ? "You do not have permission to run commands"
+                : !live ? "Server is offline — input is unavailable"
+                  : inputPlaceholder ?? "Type a command…"}
             value={command}
             disabled={!live || !canCommand || sending || foreign}
             onChange={(event) => setCommand(event.target.value)}

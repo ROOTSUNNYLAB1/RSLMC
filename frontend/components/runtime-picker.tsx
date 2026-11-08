@@ -78,8 +78,16 @@ interface JavaImage {
   present: boolean;
 }
 
+interface AppImageInfo {
+  family: "python" | "node";
+  version: string;
+  reference: string;
+  source: "yolks" | "official";
+  label: string;
+}
+
 export function RuntimePicker({
-  value, onChange, image, onImage, javaMajor, memoryMb, cpuPercent, diskMb,
+  value, onChange, image, onImage, javaMajor, memoryMb, cpuPercent, diskMb, app,
 }: {
   value: RuntimeChoice;
   onChange: (runtime: RuntimeChoice) => void;
@@ -89,6 +97,12 @@ export function RuntimePicker({
   memoryMb: number;
   cpuPercent: number;
   diskMb: number;
+  /**
+   * Set for Python/Node servers. Docker images for those runtimes are not a Java-major choice: the
+   * panel resolves one image per version (yolks when the tag exists, the official image otherwise)
+   * and shows it here instead of the Java grid.
+   */
+  app?: { family: "python" | "node"; version: string } | null;
 }) {
   const toast = useToast();
   const { can } = useSession();
@@ -96,6 +110,7 @@ export function RuntimePicker({
   const [docker, setDocker] = useState<DockerInfo | null>(null);
   const [config, setConfig] = useState<DockerConfig>({ host: null, bin: null });
   const [images, setImages] = useState<JavaImage[]>([]);
+  const [appImage, setAppImage] = useState<AppImageInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [pulling, setPulling] = useState(false);
   const [pullNote, setPullNote] = useState<string | null>(null);
@@ -110,7 +125,7 @@ export function RuntimePicker({
       const result = await api.get<{ docker: DockerInfo; config?: DockerConfig }>("/api/panel/docker");
       setDocker(result.docker);
       if (result.config) setConfig(result.config);
-      if (result.docker.available) {
+      if (result.docker.available && !app) {
         const list = await api.get<{ majors: JavaImage[] }>("/api/panel/docker/images");
         setImages(list.majors);
       }
@@ -126,12 +141,28 @@ export function RuntimePicker({
 
   useEffect(() => { void load(); }, []);
 
+  /*
+   * The image for a Python/Node version. Asked from the panel rather than guessed here, because
+   * whether `yolks:python_3.12` exists is a registry fact, and the answer decides the reference.
+   */
+  useEffect(() => {
+    if (!app) { setAppImage(null); return; }
+    api.get<{ data: (AppImageInfo | null)[] }>(`/api/apps/images?versions=${app.family}:${app.version}`)
+      .then((result) => {
+        const found = (result.data ?? []).find(Boolean) ?? null;
+        setAppImage(found);
+        if (found && found.reference !== image) onImage(found.reference);
+      })
+      .catch(() => setAppImage(null));
+  }, [app?.family, app?.version]);
+
   // When the software step changes the required Java major, keep the image in step with it.
   useEffect(() => {
+    if (app) return;
     if (value !== "docker" || !javaMajor) return;
     const match = images.find((entry) => entry.major === Number(javaMajor));
     if (match && match.reference !== image) onImage(match.reference);
-  }, [javaMajor, images, value]);
+  }, [javaMajor, images, value, app]);
 
   const selected = images.find((entry) => entry.reference === image) ?? null;
   const dockerBlocked = docker !== null && !docker.available;
@@ -422,7 +453,9 @@ export function RuntimePicker({
         <>
           <div className="runtime-image-head">
             <span className="text-xs faint">
-              Java {javaMajor} · {selected?.source === "yolks" ? "Pterodactyl yolks image" : "Eclipse Temurin image"}
+              {app
+                ? `${app.family === "python" ? "Python" : "Node.js"} ${app.version} · ${appImage ? appImage.label : "resolving image…"}`
+                : <>Java {javaMajor} · {selected?.source === "yolks" ? "Pterodactyl yolks image" : "Eclipse Temurin image"}</>}
             </span>
             <span className="spacer" />
             <Button variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()} disabled={loading || pulling}>
@@ -437,6 +470,23 @@ export function RuntimePicker({
             )}
           </div>
 
+          {app ? (
+            <div className="runtime-images">
+              {appImage ? (
+                <button
+                  type="button"
+                  className="runtime-image selected"
+                  onClick={() => onImage(appImage.reference)}
+                  title={appImage.reference}
+                >
+                  <span className="mono">{app.family === "python" ? "Python" : "Node"} {app.version}</span>
+                  <span className="faint text-xs">{appImage.source === "yolks" ? "yolks" : "official"}</span>
+                </button>
+              ) : (
+                <span className="text-xs faint">Resolving the image for this version…</span>
+              )}
+            </div>
+          ) : (
           <div className="runtime-images">
             {images.map((entry) => (
               <button
@@ -452,14 +502,19 @@ export function RuntimePicker({
               </button>
             ))}
           </div>
+          )}
 
           <div className="runtime-note">
             <Info size={12} />
             <span>
-              Image: <span className="mono">{image}</span>
-              {selected?.source === "yolks"
-                ? " — built by Pterodactyl for Minecraft servers, one tag per Java major."
-                : " — the registry did not list a yolks tag for this major, so the same Temurin JDK is pulled directly."}
+              Image: <span className="mono">{app ? (appImage?.reference ?? image) : image}</span>
+              {app
+                ? (appImage?.source === "yolks"
+                    ? " — the Pterodactyl yolks image for this runtime line, the same family of images Minecraft servers use."
+                    : " — Pterodactyl yolks has no tag for this runtime line, so the official image is used. The panel says so rather than pretending otherwise.")
+                : selected?.source === "yolks"
+                  ? " — built by Pterodactyl for Minecraft servers, one tag per Java major."
+                  : " — the registry did not list a yolks tag for this major, so the same Temurin JDK is pulled directly."}
               {" "}The first start pulls it (≈ 200–400 MB) and shows progress in the console.
             </span>
           </div>

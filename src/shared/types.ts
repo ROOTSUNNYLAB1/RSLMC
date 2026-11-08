@@ -14,7 +14,7 @@ export type ServerStatus =
   | "recovering"
   | "installing";
 
-export type SoftwareKind = "vanilla" | "plugin" | "mod" | "proxy";
+export type SoftwareKind = "vanilla" | "plugin" | "mod" | "proxy" | "app";
 
 export type ServerSoftwareId =
   | "vanilla"
@@ -27,7 +27,14 @@ export type ServerSoftwareId =
   | "quilt"
   | "velocity"
   | "bungeecord"
-  | "waterfall";
+  | "waterfall"
+  /*
+   * Non-Minecraft software. These are first-class entries in the same catalogue — same wizard, same
+   * allocation, same console — but they are started by their own interpreter instead of a JVM, and
+   * they are the only software the panel refuses to run as root.
+   */
+  | "python"
+  | "node";
 
 export interface SoftwareDefinition {
   id: ServerSoftwareId;
@@ -43,6 +50,30 @@ export interface SoftwareDefinition {
   unsupportedReason?: string;
   source: string;
   docsUrl: string;
+  /** Set for non-Minecraft software, which needs an interpreter rather than a Java runtime. */
+  appFamily?: "python" | "node";
+  /** Convenience entry file a fresh install of this software gets. */
+  entryFile?: string;
+}
+
+/** What a Python/Node server needs on top of the usual server fields. */
+export interface AppServerInfo {
+  family: "python" | "node";
+  name: string;
+  /** The interpreter version this server runs, e.g. "3.12.7" or "22.11.0". */
+  version: string;
+  /** File the interpreter is pointed at, relative to the server directory. */
+  entryFile: string;
+  /** Absolute path of the interpreter on this host, once installed. */
+  interpreterPath: string | null;
+  /** False until the interpreter archive has been unpacked on this machine. */
+  installed: boolean;
+  /** The binary name (`python3` / `node`). */
+  binary: string;
+  /** Account the process must run as; null for Minecraft software. */
+  serviceUser: string | null;
+  /** True only when the kernel really switches user for this server. */
+  isolated: boolean;
 }
 
 export type EnforcementLevel = "enforced" | "partial" | "advisory" | "unsupported";
@@ -172,6 +203,11 @@ export interface ServerSummary {
     clamped: boolean;
     source: string;
   } | null;
+  /**
+   * Present only for Python/Node servers: which interpreter, which file, and which account runs it.
+   * `null` for Minecraft software, so the UI can decide without string comparisons.
+   */
+  app: AppServerInfo | null;
 }
 
 export interface ServerMetrics {

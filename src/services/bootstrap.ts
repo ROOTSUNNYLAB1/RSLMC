@@ -104,7 +104,12 @@ export async function bootstrap(): Promise<void> {
   try {
     const { defaultJvmArgsFor } = await import("../minecraft/jvm-presets");
     const rows = query<{ id: number; software: any; memory_mb: number; jvm_args: string | null }>(
-      "SELECT id, software, memory_mb, jvm_args FROM servers WHERE jvm_args IS NULL OR trim(jvm_args) = ''",
+      /*
+       * Python/Node servers are excluded: they have no JVM, so `jvm_args` must stay empty instead of
+       * being filled with Aikar's flags that nothing would ever pass to anything.
+       */
+      `SELECT id, software, memory_mb, jvm_args FROM servers
+        WHERE (jvm_args IS NULL OR trim(jvm_args) = '') AND software NOT IN ('python', 'node')`,
     );
     for (const row of rows) {
       const flags = defaultJvmArgsFor(row.software, row.memory_mb);

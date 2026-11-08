@@ -32,6 +32,12 @@ import { describeEnforcement } from "../resources/enforcement";
 import type { RequestContext } from "../shared/http";
 import type { ServerSoftwareId } from "../shared/types";
 import { hostStats } from "../resources/host";
+import { describeApps, isAppSoftware, listAppVersions, listNodeVersions, type AppFamily } from "../apps/catalog";
+import { ensureInterpreter, listInstalledInterpreters, removeInterpreter, verifyInterpreter } from "../apps/interpreters";
+import { ensureServiceAccount, serviceAccountState } from "../runtime/nonroot";
+import { appImageFor, yolksAllTags } from "../runtime/images";
+import { installDependencies } from "../apps/exec";
+import { systemLine } from "../processes/manager";
 import { measureGamePort } from "../services/ping";
 
 function requireServer(ctx: RequestContext, permission?: Parameters<typeof requireServerAccess>[2]) {
@@ -45,6 +51,91 @@ export function registerServerRoutes(api: Router): void {
   /* ---------------- Catalogue ---------------- */
 
   api.get("/api/software", async () => json({ data: SOFTWARE_CATALOG }));
+
+  /* ---------------- Python / Node.js runtimes ---------------- */
+
+  /*
+   * Everything the wizard and the Runtime page need about the non-Minecraft software: the live version
+   * lists, which versions are already unpacked on this machine, and the service account the processes
+   * run as. One call, because all three answers come from the same host and are useless apart.
+   */
+  api.get("/api/apps", async () => {
+    const apps = await describeApps();
+    const installed = listInstalledInterpreters();
+    const account = serviceAccountState();
+    return json({
+      data: apps.map((app) => ({
+        ...app,
+        installed: installed.filter((record) => record.family === app.family).map((record) => record.version),
+      })),
+      serviceAccount: account,
+    });
+  });
+
+  /** Just the versions, cheap enough for the wizard to re-query when the family changes. */
+  api.get("/api/apps/:family/versions", async (ctx) => {
+    const family = ctx.params.family;
+    if (family !== "python" && family !== "node") throw badRequest("Unknown runtime family");
+    const versions = await listAppVersions(family as AppFamily);
+    return json({ data: versions });
+  });
+
+  /** The Docker image this family/version maps to, and whether it is a yolks tag or the official image. */
+  api.get("/api/apps/images", async (ctx) => {
+    const versions = String(ctx.query("versions") ?? "").split(",").filter(Boolean);
+    if (versions.length === 0) return json({ data: [] });
+    const tags = await yolksAllTags();
+    return json({
+      data: versions.map((entry) => {
+        const [family, version] = entry.split(":") as ["python" | "node", string];
+        if (!version) return null;
+        return appImageFor(family, version, tags);
+      }).filter(Boolean),
+      yolksReachable: tags.size > 0,
+    });
+  });
+
+  /** Install one interpreter now (Settings → Runtimes), without creating a server. */
+  api.post("/api/apps/install", async (ctx) => {
+    requirePermission(ctx.user, "system.manage");
+    const body = validate(
+      { family: v.oneOf(["python", "node"] as const), version: v.string({ min: 1, max: 30 }) },
+      await ctx.body(),
+    );
+    const record = await ensureInterpreter(body.family!, body.version!);
+    const check = await verifyInterpreter(record.family, record.version);
+    return json({ data: { ...record, verify: check } }, { status: 201 });
+  });
+
+  api.delete("/api/apps/:family/:version", async (ctx) => {
+    requirePermission(ctx.user, "system.manage");
+    const family = ctx.params.family as AppFamily;
+    if (family !== "python" && family !== "node") throw badRequest("Unknown runtime family");
+    const inUse = queryOne<{ c: number }>(
+      "SELECT COUNT(*) AS c FROM servers WHERE software = ? AND mc_version = ?", [family, ctx.params.version],
+    )?.c ?? 0;
+    removeInterpreter(family, ctx.params.version, inUse > 0);
+    return json({ ok: true });
+  });
+
+  /*
+   * The service account. Creating it is an administrative act on the machine (a system user with a
+   * password), so it is offered explicitly here and requires `system.manage` — the automatic path at
+   * install time only runs when an operator has already asked for an app server.
+   */
+  api.get("/api/apps/service-account", async () => json({ data: serviceAccountState() }));
+
+  api.post("/api/apps/service-account", async (ctx) => {
+    requirePermission(ctx.user, "system.manage");
+    const result = ensureServiceAccount();
+    return json({
+      data: result.state,
+      created: result.created,
+      // Returned exactly once, when this call set it: the panel does not store plaintext passwords.
+      password: result.password ?? null,
+      notes: result.notes,
+    });
+  });
 
   /*
    * Minimal host facts for the create wizard (CPU default, memory suggestion). Authenticated like
@@ -121,7 +212,13 @@ export function registerServerRoutes(api: Router): void {
         serverArgs: v.string({ max: 500, optional: true }),
         autoStart: v.boolean({ optional: true }),
         crashRecovery: v.boolean({ optional: true }),
-        acceptEula: v.boolean(),
+        /*
+         * Required for Minecraft software (it is Mojang's EULA), meaningless for Python/Node — the
+         * service validates per software rather than forcing a checkbox that does not apply.
+         */
+        acceptEula: v.boolean({ optional: true }),
+        /** Python/Node: the file the interpreter starts. Defaults to main.py / index.js. */
+        entryFile: v.string({ max: 200, optional: true }),
         // Only a controller may stage a server without running the installer straight away (used by
         // the multi-node test suite and by a controller that configures before installing).
         install: v.boolean({ optional: true }),
@@ -165,7 +262,8 @@ export function registerServerRoutes(api: Router): void {
         serverArgs: input.serverArgs ?? "nogui",
         autoStart: input.autoStart ?? false,
         crashRecovery: input.crashRecovery ?? false,
-        acceptEula: input.acceptEula!,
+        acceptEula: input.acceptEula ?? false,
+        entryFile: input.entryFile ?? undefined,
         runtime: input.runtime ?? "standalone",
         dockerImage: input.dockerImage ?? null,
         install: ctx.user!.id === 0 ? input.install : undefined,
@@ -289,12 +387,22 @@ export function registerServerRoutes(api: Router): void {
       await ctx.body(),
     );
     if (!body.runtime) throw badRequest("Choose a runtime: standalone or docker.");
-    const server = updateServerRuntime(
+    const server = await updateServerRuntime(
       id,
       { runtime: body.runtime, dockerImage: body.dockerImage ?? null },
       ctx.user?.username ?? "system",
     );
     return json({ server });
+  });
+
+  /*
+   * Dependency install for Python/Node servers. The console writes to the program's stdin, not to a
+   * shell, so `pip install` cannot be typed there — this is the real, bounded version of that request.
+   */
+  api.post("/api/servers/:id/app/dependencies", async (ctx) => {
+    const id = requireServer(ctx, "server.settings");
+    const result = await installDependencies(id, (line) => systemLine(id, line));
+    return json({ data: result }, { status: result.ok ? 200 : 500 });
   });
 
   /* ---------------- Latency ---------------- */

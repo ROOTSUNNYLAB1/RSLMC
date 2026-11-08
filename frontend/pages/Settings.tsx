@@ -476,6 +476,11 @@ function LimitedStartupCard({ server }: { server: ServerSummary }) {
 
 export function StartupPage({ server }: { server: ServerSummary }) {
   const { can } = useSession();
+  /*
+   * Python/Node servers are not launched by a JVM, so none of the heap/preset machinery below applies.
+   * They get their own startup page rather than a page full of "-Xmx" for a process that never sees one.
+   */
+  if (server.app) return <AppStartupPage server={server} />;
   const [detail, setDetail] = useState<any>(null);
   useEffect(() => { api.get<any>(`/api/servers/${server.id}`).then(setDetail).catch(() => {}); }, [server.id]);
 
@@ -544,6 +549,140 @@ export function StartupPage({ server }: { server: ServerSummary }) {
           </Card>
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * Startup for a Python/Node server: the entry file, the extra arguments, the interpreter, and — the part
+ * that matters most — which account the process really runs as.
+ */
+function AppStartupPage({ server }: { server: ServerSummary }) {
+  const toast = useToast();
+  const { can } = useSession();
+  const app = server.app!;
+  const [entryFile, setEntryFile] = useState(app.entryFile);
+  const [serverArgs, setServerArgs] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [detail, setDetail] = useState<any>(null);
+
+  useEffect(() => {
+    api.get<any>(`/api/servers/${server.id}`).then(setDetail).catch(() => {});
+  }, [server.id]);
+
+  useEffect(() => {
+    setEntryFile(app.entryFile);
+    if (detail?.startup?.serverArgs !== undefined) setServerArgs(detail.startup.serverArgs ?? "");
+  }, [app.entryFile, detail?.startup?.serverArgs]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.patch(`/api/servers/${server.id}`, { entryFile, serverArgs });
+      toast.success("Startup updated", `The next start runs ${entryFile}${serverArgs ? ` with: ${serverArgs}` : ""}.`);
+    } catch (error) {
+      toast.error("Could not update startup", errorMessage(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const binary = app.family === "python" ? "python3" : "node";
+  const manager = app.family === "python" ? "pip install -r requirements.txt" : "npm install";
+  const [installing, setInstalling] = useState(false);
+
+  /*
+   * The real dependency install: the panel runs pip/npm as the server's own account inside its own
+   * directory and streams the output to the console. It is deliberately this narrow — the console
+   * writes to the program's stdin, so an arbitrary shell is not something this build offers.
+   */
+  const installDeps = async () => {
+    setInstalling(true);
+    try {
+      const result = await api.post<{ data: { ok: boolean; command: string; output: string } }>(
+        `/api/servers/${server.id}/app/dependencies`,
+      );
+      if (result.data.ok) toast.success("Dependencies installed", `${result.data.command} completed — output is in the console.`);
+      else toast.error("Dependency install failed", `See the console for the full output of ${result.data.command}.`);
+    } catch (error) {
+      toast.error("Could not install dependencies", errorMessage(error));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="Startup"
+        icon={<KeyRound size={19} />}
+        subtitle={<>How <strong style={{ color: "var(--text)" }}>{server.name}</strong> is launched · {app.name} {app.version}</>}
+      />
+      <div className="grid grid-2">
+        <Card title="Launch configuration" icon={<Cpu size={12} />} bodyClass="tight">
+          <div className="info-list">
+            <div className="info-row"><span className="k">Interpreter</span><span className="v mono text-xs" title={app.interpreterPath ?? undefined}>{binary} {app.version}</span></div>
+            <div className="info-row"><span className="k">Entry file</span><span className="v mono text-xs">{app.entryFile}</span></div>
+            <div className="info-row"><span className="k">Working directory</span><span className="v mono text-xs">servers/&lt;uuid&gt;</span></div>
+            <div className="info-row"><span className="k">Command</span><span className="v mono text-xs">{binary} {app.entryFile}</span></div>
+            <div className="info-row"><span className="k">Memory allocation</span><span className="v">{server.memoryMb} MB (process cap)</span></div>
+            <div className="info-row"><span className="k">CPU allocation</span><span className="v">{cpuAllocationLabel(server.cpuPercent)}</span></div>
+            <div className="info-row">
+              <span className="k">Runs as</span>
+              <span className="v">
+                {app.isolated
+                  ? <><span className="runtime-chip">{app.serviceUser}</span> <span className="faint text-xs">password-protected · no sudo</span></>
+                  : <span className="faint text-xs">panel account — user switching is unavailable on this host</span>}
+              </span>
+            </div>
+            <div className="info-row"><span className="k">Process status</span><span className="v">{server.status}{detail?.runtime?.pid ? ` · PID ${detail.runtime.pid}` : ""}</span></div>
+          </div>
+          <div className="divider" style={{ margin: "12px 0" }} />
+          <div className="form-grid">
+            <Field label="Entry file" hint="Relative to the server directory. Must stay inside it.">
+              <Input value={entryFile} onChange={(event) => setEntryFile(event.target.value)} disabled={!can("server.settings")} />
+            </Field>
+            <Field label="Arguments" hint="Passed after the entry file, one per space.">
+              <Input value={serverArgs} onChange={(event) => setServerArgs(event.target.value)} disabled={!can("server.settings")} placeholder="none" />
+            </Field>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <Button variant="primary" icon={<Save size={12} />} loading={saving} disabled={!can("server.settings")} onClick={() => void save()}>
+              Save startup
+            </Button>
+          </div>
+        </Card>
+
+        <div className="stack">
+          <Card title={app.installed ? "Interpreter ready" : "Interpreter missing"} icon={<Boxes size={12} />}>
+            <Banner tone={app.installed ? "success" : "warning"} title={app.installed ? `${app.name} ${app.version} is installed` : `${app.name} ${app.version} is not on this host`}>
+              {app.installed
+                ? <>Installed at <span className="mono">{app.interpreterPath}</span>. Shared with every server on this machine that uses {app.version} — it is installed once, not per server.</>
+                : "Starting the server installs it automatically: the archive is downloaded from the official source, its SHA-256 is verified, and it is unpacked once for every server that uses this version."}
+            </Banner>
+          </Card>
+          <Card title="Dependencies" icon={<Download size={12} />}>
+            <div className="stack" style={{ gap: 8, fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6 }}>
+              <p style={{ margin: 0 }}>
+                Packages install into this server's own directory, never into the shared interpreter, so two
+                servers on the same {app.name} version cannot break each other with conflicting versions.
+              </p>
+              <div className="code-block" style={{ whiteSpace: "pre-wrap" }}>{manager}</div>
+              <p style={{ margin: 0 }} className="faint text-xs">
+                The console writes to your program's stdin — it is not a shell, so pip/npm commands are not
+                typed there. This button runs the command above as <span className="mono">{app.isolated ? app.serviceUser : "the panel account"}</span>
+                {" "}and streams the output to the console.
+              </p>
+              <div className="row">
+                <Button icon={<Download size={12} />} loading={installing} disabled={!can("server.settings") || installing} onClick={() => void installDeps()}>
+                  Install dependencies
+                </Button>
+                <span className="text-xs faint">{app.family === "python" ? "Needs requirements.txt" : "Needs package.json"}</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
     </>
   );
 }

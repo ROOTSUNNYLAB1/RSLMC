@@ -552,6 +552,8 @@ says so instead of pretending.
 | NeoForge    | NeoForged maven installer                           | managed Java |
 | BungeeCord  | Jenkins artifact (unverified metadata)              | marked *limited* |
 | Spigot      | —                                                   | **not offered**: no official download exists |
+| **Python 3** | `python-build-standalone` (astral-sh) release assets | every published minor line, SHA-256 verified |
+| **Node.js** | `nodejs.org/dist` index + tarballs                  | every major line, SHA-256 verified |
 
 ### Java runtime manager (standalone)
 
@@ -562,6 +564,44 @@ says so instead of pretending.
   with `EACCES`.
 * Minecraft version → Java mapping (`26.x → 25`, `1.20.5+ → 21`, `1.18–1.20.4 → 17`,
   `1.17 → 16`, `≤1.16.5 → 8`) with a compatibility warning on the Startup page.
+
+### Python 3 and Node.js servers (first-class, not a side door)
+
+A small VPS usually hosts more than one thing, and "run this bot with the same limits, console, files
+and backups as my Minecraft server" is the request that follows. Python 3 and Node.js are therefore
+software entries in the *same* picker as Paper and Fabric — same allocation, same port model, same
+console, same file manager, same backups, same schedules.
+
+![Python and Node.js in the software picker](docs/screenshots/app-software-picker.png)
+
+* **Every version the project publishes for this machine.** Node comes from the official
+  `nodejs.org/dist/index.json` (one entry per major line, newest patch, LTS marked); Python comes from
+  `python-build-standalone`'s release assets, walking back through releases so a line that upstream has
+  stopped building (3.10 today) is still offered from the newest release that built it. Nothing is a
+  hard-coded list, and a version the panel cannot confirm is not offered.
+* **Standalone means standalone.** The interpreter itself is downloaded, SHA-256 verified, unpacked once
+  per `(family, version)` under `<data>/runtimes/` and **shared** by every server using that version —
+  so ten Node bots on 22.x cost one download, not ten.
+* **Never root.** A Python/Node server is started as `rslmc-nonroot`: a normal system account with a
+  generated password, its own home, and **no sudo**. The switch is `setuid` on spawn, i.e. the kernel
+  enforces it, and the panel reports the uid it really used. If the panel itself is not root it cannot
+  switch users — and then it says so in the console and on the server page instead of pretending.
+* **No Minecraft furniture.** No EULA checkbox, no `server.properties`, no players/worlds/map pages: those
+  links are absent, not broken. What you get instead is the entry file (`main.py` / `index.js`), the
+  interpreter version, the account the process runs as, and a real **Install dependencies** action that
+  runs `pip install -r requirements.txt` / `npm install` as that same account.
+* **The console writes to your program's stdin.** That is what the input box does — it is not a shell,
+  and the placeholder says so rather than promising a terminal.
+* **Optional Docker runtime.** The same first question ("Standalone or Docker?") applies: Pterodactyl
+  **yolks** images are preferred (`python_3.7–3.11`, `nodejs_12–20`), and for lines yolks never
+  published (Python 3.12+, Node 21+) the official `python:3.x-slim` / `node:x-slim` image is used — the
+  wizard shows which one, and why.
+
+![Running Node.js server, with real isolation](docs/screenshots/app-server-overview.png)
+
+The interpreter and the account are managed under **Admin → App Runtimes**, next to Java Runtimes:
+which versions are installed here, which versions upstream publishes, and the service account's real
+uid/gid, password state and sudo status.
 
 ### JVM flags — optimised by default, visible always
 
@@ -1160,7 +1200,7 @@ files live on the machine that runs the server.
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (41 files, 441 tests)
+bun run test                          # every suite, one process per file (42 files, 468 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
@@ -1235,6 +1275,15 @@ animations are short and respect `prefers-reduced-motion`.
   still adopted after a restart, but their console history restarts. If you run the panel under a
   supervisor that kills the whole process group on exit, restart the panel through that supervisor
   instead — RSLMC says as much on the page.
+* A Python/Node server cannot be isolated on a host where the panel is not root: switching user needs
+  that privilege. The panel reports "panel account" and explains it instead of claiming isolation; the
+  Docker runtime is the alternative there.
+* The service account needs *execute* permission on every directory between `/` and its files. When the
+  data root sits under a `0700` home directory the panel widens only the execute bit on those
+  directories (never read, so nothing becomes listable) and reports what it changed.
+* There is no arbitrary shell for app servers. You get `pip install -r requirements.txt` / `npm install`
+  as a real action, and everything else goes through the file manager — a web panel that runs arbitrary
+  commands as a service account is a much bigger surface, and this build does not pretend to have it.
 * An update needs write access to the code folder. Read-only deployments must keep updating by
   replacing the code by hand; the About page reports the failed step instead of pretending.
 

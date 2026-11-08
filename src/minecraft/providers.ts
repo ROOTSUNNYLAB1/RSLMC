@@ -5,6 +5,7 @@ import { fetchJson, downloadFile, writeFileAtomic } from "../services/download";
 import { ApiException } from "../shared/http";
 import type { ServerSoftwareId, SoftwareDefinition } from "../shared/types";
 import { javaMajorForMcVersion } from "./java-requirements";
+import { APP_FAMILIES, isAppSoftware, listAppVersions } from "../apps/catalog";
 
 export const SOFTWARE_CATALOG: SoftwareDefinition[] = [
   {
@@ -73,7 +74,31 @@ export const SOFTWARE_CATALOG: SoftwareDefinition[] = [
     description: "Legacy BungeeCord fork from PaperMC. Waterfall is end-of-life upstream.",
     source: "fill.papermc.io", docsUrl: "https://docs.papermc.io/waterfall/",
   },
+  /*
+   * Non-Minecraft software, in the same list as the servers above so the wizard has one picker.
+   * `kind: "app"` is what tells the rest of the panel that plugins, worlds and server.properties do
+   * not apply here, and `appFamily` is what the launcher and the installer dispatch on.
+   */
+  {
+    id: "python", name: APP_FAMILIES.python.name, kind: "app", proxy: false, installerBased: false,
+    supportsPlugins: false, supportsMods: false, supported: true,
+    description: "Any Python 3 program — bots, APIs, workers. Standalone CPython from python-build-standalone, with pip.",
+    source: APP_FAMILIES.python.source, docsUrl: APP_FAMILIES.python.docsUrl,
+    appFamily: "python", entryFile: APP_FAMILIES.python.entryFile,
+  },
+  {
+    id: "node", name: APP_FAMILIES.node.name, kind: "app", proxy: false, installerBased: false,
+    supportsPlugins: false, supportsMods: false, supported: true,
+    description: "Any Node.js program — Discord bots, Express APIs, workers. Official nodejs.org build, with npm.",
+    source: APP_FAMILIES.node.source, docsUrl: APP_FAMILIES.node.docsUrl,
+    appFamily: "node", entryFile: APP_FAMILIES.node.entryFile,
+  },
 ];
+
+/** True for the software that is started by an interpreter instead of a JVM. */
+export function isAppSoftwareId(id: string): boolean {
+  return isAppSoftware(id);
+}
 
 export function softwareDefinition(id: ServerSoftwareId): SoftwareDefinition {
   const found = SOFTWARE_CATALOG.find((item) => item.id === id);
@@ -100,7 +125,10 @@ async function cached<T>(key: string, loader: () => Promise<T>, ttl = TTL): Prom
 export interface VersionInfo {
   id: string;
   type: "release" | "snapshot" | "beta" | "alpha";
+  /** Java major this version needs; 0 for non-JVM software (Python/Node). */
   javaMajor: number;
+  /** Optional display label — used by app versions, where "22.11.0 (LTS)" reads better than bare. */
+  label?: string;
 }
 
 export interface BuildInfo {
@@ -312,6 +340,22 @@ export async function quiltVersions(): Promise<VersionInfo[]> {
 
 /** Every version list is fetched live from the project's own metadata endpoint. */
 export async function listVersions(software: ServerSoftwareId, includeExperimental = false): Promise<VersionInfo[]> {
+  /*
+   * Python and Node versions come from their own providers, and they are not Minecraft versions: the
+   * list is flat, has no Java requirement, and can honestly report that a version cannot be installed
+   * on this machine. `javaMajor: 0` means "not applicable" — nothing in the UI renders a JVM row for it.
+   */
+  if (isAppSoftware(software)) {
+    const versions = await listAppVersions(software);
+    return versions
+      .filter((version) => !version.unavailableReason)
+      .map((version) => ({
+        id: version.version,
+        type: version.lts ? "release" : "release",
+        javaMajor: 0,
+        label: `${version.version}${version.lts ? " (LTS)" : ""}`,
+      })) as VersionInfo[];
+  }
   switch (software) {
     case "vanilla": return vanillaVersions(includeExperimental);
     case "paper": return paperFamilyVersions("paper", includeExperimental);
@@ -337,6 +381,13 @@ export async function listVersions(software: ServerSoftwareId, includeExperiment
 
 /** Resolves the concrete artifact to download for a given version. */
 export async function resolveBuild(software: ServerSoftwareId, version: string): Promise<BuildInfo> {
+  if (isAppSoftware(software)) {
+    // No jar to resolve: these runtimes are installed by `src/apps/interpreters.ts`, and saying so is
+    // better than an empty BuildInfo that later reads as "download failed".
+    const definition = softwareDefinition(software);
+    throw new ApiException(400, "not_minecraft",
+      `${definition.name} is not installed from a Minecraft artifact — the panel installs interpreter ${version} itself.`);
+  }
   switch (software) {
     case "vanilla": return vanillaBuild(version);
     case "paper": return paperFamilyLatestBuild("paper", version);
@@ -476,6 +527,10 @@ export async function installServerSoftware(opts: {
   serverId?: number;
 }): Promise<InstallResult> {
   const definition = softwareDefinition(opts.software);
+  if (isAppSoftware(opts.software)) {
+    throw new ApiException(400, "not_minecraft",
+      `${definition.name} servers are prepared by the interpreter installer, not by a Minecraft artifact download.`);
+  }
   const build = await resolveBuild(opts.software, opts.version);
   ensureDir(opts.directory);
   const artifactPath = join(opts.directory, build.fileName);

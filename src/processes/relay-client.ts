@@ -201,6 +201,11 @@ export interface StartRelayOptions extends RelayCallbacks {
   command: string[];
   cwd: string;
   env?: Record<string, string>;
+  /**
+   * Uid/gid the *server* process must run as. The relay itself stays where the panel put it; only the
+   * child is switched, which is what gives Python/Node servers their service account.
+   */
+  identity?: { uid: number; gid: number; user: string } | null;
 }
 
 /**
@@ -219,6 +224,7 @@ export async function startRelay(options: StartRelayOptions): Promise<RelayConne
     command: options.command,
     cwd: options.cwd,
     env: options.env ?? {},
+    identity: options.identity ?? null,
     statePath,
     logPath,
     token,

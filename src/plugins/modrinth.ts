@@ -13,7 +13,10 @@ import type { ServerSoftwareId } from "../shared/types";
 
 const API = "https://api.modrinth.com/v2";
 
-/** Minecraft server software → Modrinth loader tags. */
+/**
+ * Minecraft server software → Modrinth loader tags. Python/Node have no loaders: an empty list is the
+ * honest answer, and the plugin pages are hidden for those servers in the UI as well.
+ */
 export const LOADER_MAP: Record<ServerSoftwareId, string[]> = {
   vanilla: [],
   paper: ["paper", "spigot", "bukkit"],
@@ -26,6 +29,8 @@ export const LOADER_MAP: Record<ServerSoftwareId, string[]> = {
   velocity: ["velocity"],
   bungeecord: ["bungeecord", "waterfall"],
   waterfall: ["waterfall", "bungeecord"],
+  python: [],
+  node: [],
 };
 
 export function projectTypeFor(software: ServerSoftwareId): "plugin" | "mod" | null {

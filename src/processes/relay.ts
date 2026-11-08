@@ -32,6 +32,8 @@ interface RelayPlan {
   command: string[];
   cwd: string;
   env: Record<string, string>;
+  /** When set, the child runs as this account instead of the relay's own (Linux only). */
+  identity?: { uid: number; gid: number; user: string } | null;
   statePath: string;
   logPath: string;
   token: string;
@@ -106,6 +108,9 @@ function main(): void {
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, ...plan.env },
+      ...(plan.identity && typeof plan.identity.uid === "number"
+        ? { uid: plan.identity.uid, gid: plan.identity.gid }
+        : {}),
       onExit(_p, exitCode, signalCode) {
         finish(exitCode ?? null, signalCode === null ? null : String(signalCode));
       },

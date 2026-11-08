@@ -44,6 +44,8 @@ const TRUSTED_HOST_PATTERNS = [
   /(^|\.)forgecdn\.net$/,
   /(^|\.)minecraftforge\.net$/,
   /(^|\.)md-5\.net$/,
+  // Node.js servers: the official dist index and tarballs (round 57).
+  /(^|\.)nodejs\.org$/,
   /(^|\.)modrinth\.com$/,
   /(^|\.)modrinth\.network$/,
   /(^|\.)cdn\.modrinth\.com$/,

@@ -9,7 +9,7 @@ import { useRouter } from "../lib/router";
 import { cpuAllocationLabel } from "../lib/format";
 import { RuntimePicker, type RuntimeChoice } from "../components/runtime-picker";
 
-interface VersionInfo { id: string; type: string; javaMajor: number }
+interface VersionInfo { id: string; type: string; javaMajor: number; label?: string }
 interface NodeInfo { id: number; name: string; isLocal: boolean; online: boolean; maintenance: boolean }
 
 const STEPS = [
@@ -50,10 +50,23 @@ export function CreateServerPage() {
     publicHost: "", publicPort: "",
     memoryMb: 2048, cpuPercent: 100, diskMb: 10240,   // CPU default widens to all host cores on load
     jvmArgs: "", serverArgs: "nogui", autoStart: false, crashRecovery: true, acceptEula: false,
+    /*
+     * Python/Node: the file the interpreter starts. Kept in the same form object as everything else so
+     * the Review step and the request body can never disagree.
+     */
+    entryFile: "",
     // `docker` is offered by the wizard only when a daemon answers; the server-side create call refuses
     // it either way, so a stale browser cannot invent a container on a machine without Docker.
     runtime: "standalone" as RuntimeChoice, dockerImage: "",
   });
+
+  /*
+   * Python and Node.js are software in the same picker, but they are not Minecraft: no Java major, no
+   * EULA, no `nogui`, and the "version" is the interpreter line. Everything else — runtime choice,
+   * allocation, networking — applies unchanged.
+   */
+  const appFamily: "python" | "node" | null =
+    form.software === "python" || form.software === "node" ? form.software : null;
 
   // Declared *after* `form`: reading `form` above the useState call is a temporal-dead-zone error
   // ("Cannot access 'form' before initialization") that blanks the page the moment it renders.
@@ -117,7 +130,8 @@ export function CreateServerPage() {
     }
   }, [selectedVersion]);
 
-  const canSubmit = form.name.trim().length >= 2 && form.mcVersion && form.acceptEula && form.ownerId > 0 && form.nodeId > 0;
+  const canSubmit = form.name.trim().length >= 2 && Boolean(form.mcVersion)
+    && (appFamily !== null || form.acceptEula) && form.ownerId > 0 && form.nodeId > 0;
 
   const submit = async () => {
     setSubmitting(true);
@@ -142,11 +156,18 @@ export function CreateServerPage() {
         serverArgs: form.serverArgs,
         autoStart: form.autoStart,
         crashRecovery: form.crashRecovery,
-        acceptEula: form.acceptEula,
+        acceptEula: appFamily ? true : form.acceptEula,
+        ...(appFamily ? { entryFile: form.entryFile || undefined } : {}),
         runtime: form.runtime,
         ...(form.runtime === "docker" && form.dockerImage ? { dockerImage: form.dockerImage } : {}),
       });
-      setInstallInfo({ id: result.installId, label: "Queued — downloading Java runtime and server software", progress: 0, total: 0, done: false });
+      setInstallInfo({
+        id: result.installId,
+        label: appFamily
+          ? `Queued — installing ${appFamily === "python" ? "Python" : "Node.js"} ${form.mcVersion} and preparing ${form.entryFile || "the entry file"}`
+          : "Queued — downloading Java runtime and server software",
+        progress: 0, total: 0, done: false,
+      });
       toast.success("Server created", "Installation started in the background.");
       setTimeout(() => navigate(`/servers/${result.server.id}/overview`), 900);
     } catch (err) {
@@ -162,7 +183,7 @@ export function CreateServerPage() {
       <PageHeader
         title="Create a server"
         icon={<Rocket size={19} />}
-        subtitle="RSLMC downloads the exact Java runtime and server software your selection needs — nothing is pre-installed on the host."
+        subtitle="RSLMC installs exactly what your selection needs — a Temurin JVM for Minecraft, a standalone Python or Node.js interpreter for apps. Nothing is assumed to be on the host."
         actions={<Button icon={<ArrowLeft size={14} />} onClick={() => navigate("/dashboard")}>Back</Button>}
       />
 
@@ -230,6 +251,7 @@ export function CreateServerPage() {
             memoryMb={Number(form.memoryMb) || 0}
             cpuPercent={Number(form.cpuPercent) || 100}
             diskMb={Number(form.diskMb) || 0}
+            app={appFamily ? { family: appFamily, version: form.mcVersion } : null}
           />
         </Card>
       ) : null}
@@ -239,14 +261,26 @@ export function CreateServerPage() {
           title="Server software"
           icon={<Package size={12} />}
           actions={
-            <Toggle checked={includeExperimental} onChange={setIncludeExperimental} label="Show snapshots / pre-releases" />
+            appFamily ? null : <Toggle checked={includeExperimental} onChange={setIncludeExperimental} label="Show snapshots / pre-releases" />
           }
         >
           <div className="grid grid-3" style={{ gap: 9 }}>
             {catalog.map((item) => (
               <button
                 key={item.id}
-                onClick={() => setForm({ ...form, software: item.id, mcVersion: "" })}
+                onClick={() => {
+                  const nextIsApp = item.id === "python" || item.id === "node";
+                  setForm({
+                    ...form,
+                    software: item.id,
+                    mcVersion: "",
+                    javaMajor: nextIsApp ? 0 : form.javaMajor,
+                    // `nogui` is a Minecraft flag, and the EULA is Mojang's — neither applies here.
+                    serverArgs: nextIsApp ? "" : (form.serverArgs || "nogui"),
+                    acceptEula: nextIsApp ? true : form.acceptEula,
+                    entryFile: nextIsApp ? (item.entryFile ?? (item.id === "python" ? "main.py" : "index.js")) : "",
+                  });
+                }}
                 className="card"
                 style={{
                   textAlign: "left", cursor: "pointer", padding: 12,
@@ -271,7 +305,11 @@ export function CreateServerPage() {
           </div>
 
           <div className="form-grid" style={{ marginTop: 14 }}>
-            <Field label={`Minecraft version${versionsLoading ? " — loading…" : ""}`} required hint={selectedSoftware ? `Source: ${selectedSoftware.source}` : undefined}>
+            <Field
+              label={`${appFamily ? (appFamily === "python" ? "Python version" : "Node.js version") : "Minecraft version"}${versionsLoading ? " — loading…" : ""}`}
+              required
+              hint={selectedSoftware ? `Source: ${selectedSoftware.source} — read live, not a fixed list.` : undefined}
+            >
               <Select value={form.mcVersion} onChange={(event) => {
                 const version = versions.find((entry) => entry.id === event.target.value);
                 setForm({ ...form, mcVersion: event.target.value, javaMajor: version?.javaMajor ?? form.javaMajor });
@@ -279,21 +317,43 @@ export function CreateServerPage() {
                 {versions.length === 0 ? <option value="">No versions available</option> : null}
                 {versions.map((version) => (
                   <option key={version.id} value={version.id}>
-                    {version.id} — Java {version.javaMajor}{version.type !== "release" ? ` (${version.type})` : ""}
+                    {appFamily ? (version.label ?? version.id) : `${version.id} — Java ${version.javaMajor}${version.type !== "release" ? ` (${version.type})` : ""}`}
                   </option>
                 ))}
               </Select>
             </Field>
-            <Field label="Java runtime" hint="RSLMC downloads this exact Temurin major when the server is created.">
-              <Select value={form.javaMajor} onChange={(event) => setForm({ ...form, javaMajor: Number(event.target.value) })}>
-                {[8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25].map((major) => (
-                  <option key={major} value={major}>Java {major}{selectedVersion && major === selectedVersion.javaMajor ? " (recommended)" : ""}</option>
-                ))}
-              </Select>
-            </Field>
+            {appFamily ? (
+              <Field
+                label="Entry file"
+                required
+                hint={`Started as ${appFamily === "python" ? "python3" : "node"} <entry file>, inside the server directory. You can change it later on the Startup page.`}
+              >
+                <Input
+                  value={form.entryFile}
+                  placeholder={appFamily === "python" ? "main.py" : "index.js"}
+                  onChange={(event) => setForm({ ...form, entryFile: event.target.value })}
+                />
+              </Field>
+            ) : (
+              <Field label="Java runtime" hint="RSLMC downloads this exact Temurin major when the server is created.">
+                <Select value={form.javaMajor} onChange={(event) => setForm({ ...form, javaMajor: Number(event.target.value) })}>
+                  {[8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25].map((major) => (
+                    <option key={major} value={major}>Java {major}{selectedVersion && major === selectedVersion.javaMajor ? " (recommended)" : ""}</option>
+                  ))}
+                </Select>
+              </Field>
+            )}
           </div>
 
-          {selectedVersion && form.javaMajor < selectedVersion.javaMajor ? (
+          {appFamily ? (
+            <Banner tone="info" title={`${selectedSoftware?.name} server`}>
+              The panel installs the official {appFamily === "python" ? "standalone CPython build (python-build-standalone)" : "Node.js build from nodejs.org"}
+              {" "}for exactly {form.mcVersion} on this machine, shared with any other server using the same version.
+              It starts <span className="mono">{form.entryFile || (appFamily === "python" ? "main.py" : "index.js")}</span> and runs as
+              {" "}<span className="mono">rslmc-nonroot</span> — a password-protected account with no sudo — never as root.
+            </Banner>
+          ) : null}
+          {!appFamily && selectedVersion && form.javaMajor < selectedVersion.javaMajor ? (
             <Banner tone="warning" title="Java version below the requirement">
               {selectedSoftware?.name} {selectedVersion.id} expects Java {selectedVersion.javaMajor} or newer. The server will probably fail to start with Java {form.javaMajor}.
             </Banner>
@@ -343,7 +403,12 @@ export function CreateServerPage() {
       {step === 5 ? (
         <Card title="Resources" icon={<Cpu size={12} />}>
           <div className="form-grid">
-            <Field label="Memory" hint={`Hard cap for the whole process, minimum 128 MB. The Java heap grows up to ${heapMbFor(Number(form.memoryMb) || 0)} MB, starts at ${initialHeapMbFor(Number(form.memoryMb) || 0)} MB, and ${overheadMbFor(Number(form.memoryMb) || 0)} MB is kept for JVM runtime overhead.${allocationAdvice(Number(form.memoryMb) || 0) ? ` ${allocationAdvice(Number(form.memoryMb) || 0)}` : ""}`}>
+            <Field
+              label="Memory"
+              hint={appFamily
+                ? `Hard cap for the whole process, minimum 128 MB. ${appFamily === "node" ? `Node is started with --max-old-space-size=${Math.max(64, Math.round((Number(form.memoryMb) || 0) * 0.75))} MB so it collects before the cap instead of being killed.` : "Python has no heap flag; the cap is enforced by the kernel on the whole process tree."}`
+                : `Hard cap for the whole process, minimum 128 MB. The Java heap grows up to ${heapMbFor(Number(form.memoryMb) || 0)} MB, starts at ${initialHeapMbFor(Number(form.memoryMb) || 0)} MB, and ${overheadMbFor(Number(form.memoryMb) || 0)} MB is kept for JVM runtime overhead.${allocationAdvice(Number(form.memoryMb) || 0) ? ` ${allocationAdvice(Number(form.memoryMb) || 0)}` : ""}`}
+            >
               <div className="inline-group">
                 <Input type="number" min={128} max={65536} step={128} value={form.memoryMb} onChange={(event) => setForm({ ...form, memoryMb: Number(event.target.value) })} />
                 <span className="text-xs faint">MB</span>
@@ -365,16 +430,23 @@ export function CreateServerPage() {
                 <span className="text-xs faint">MB</span>
               </div>
             </Field>
-            <Field label="Server arguments" hint="Passed after the jar. Use nogui for headless operation.">
-              <Input value={form.serverArgs} onChange={(event) => setForm({ ...form, serverArgs: event.target.value })} />
-            </Field>
             <Field
-              label="Extra JVM arguments"
-              className="span-2"
-              hint="Leave empty to get the optimised preset for this software: Aikar's G1GC flags for game servers, the small G1GC proxy set for Velocity/BungeeCord, SerialGC on ≤1 GB heaps. Anything you type here replaces the preset."
+              label="Server arguments"
+              hint={appFamily
+                ? `Passed to your program after the entry file, one argument per space. Leave empty unless ${appFamily === "python" ? "main.py" : "index.js"} reads them.`
+                : "Passed after the jar. Use nogui for headless operation."}
             >
-              <Input value={form.jvmArgs} onChange={(event) => setForm({ ...form, jvmArgs: event.target.value })} placeholder="Aikar's flags (recommended · default)" />
+              <Input value={form.serverArgs} onChange={(event) => setForm({ ...form, serverArgs: event.target.value })} placeholder={appFamily ? "none" : "nogui"} />
             </Field>
+            {appFamily ? null : (
+              <Field
+                label="Extra JVM arguments"
+                className="span-2"
+                hint="Leave empty to get the optimised preset for this software: Aikar's G1GC flags for game servers, the small G1GC proxy set for Velocity/BungeeCord, SerialGC on ≤1 GB heaps. Anything you type here replaces the preset."
+              >
+                <Input value={form.jvmArgs} onChange={(event) => setForm({ ...form, jvmArgs: event.target.value })} placeholder="Aikar's flags (recommended · default)" />
+              </Field>
+            )}
           </div>
         </Card>
       ) : null}
@@ -387,11 +459,14 @@ export function CreateServerPage() {
               <div className="info-row"><span className="k">Software</span><span className="v">{selectedSoftware?.name} {form.mcVersion}</span></div>
               <div className="info-row">
                 <span className="k">Runtime</span>
-                <span className="v">{form.runtime === "docker" ? "Docker container" : "Standalone JVM"}</span>
+                <span className="v">{form.runtime === "docker" ? "Docker container" : (appFamily ? "Standalone interpreter" : "Standalone JVM")}</span>
               </div>
               {form.runtime === "docker" ? (
                 <>
-                  <div className="info-row"><span className="k">Image</span><span className="v mono text-xs">{form.dockerImage || `Java ${form.javaMajor}`}</span></div>
+                  <div className="info-row">
+                    <span className="k">Image</span>
+                    <span className="v mono text-xs">{form.dockerImage || (appFamily ? `${appFamily === "python" ? "python" : "node"} ${form.mcVersion}` : `Java ${form.javaMajor}`)}</span>
+                  </div>
                   <div className="info-row">
                     <span className="k">Limits</span>
                     <span className="v">
@@ -404,6 +479,12 @@ export function CreateServerPage() {
                       })()}
                     </span>
                   </div>
+                </>
+              ) : appFamily ? (
+                <>
+                  <div className="info-row"><span className="k">Interpreter</span><span className="v">{appFamily === "python" ? "CPython" : "Node.js"} {form.mcVersion}</span></div>
+                  <div className="info-row"><span className="k">Entry file</span><span className="v mono">{form.entryFile || (appFamily === "python" ? "main.py" : "index.js")}</span></div>
+                  <div className="info-row"><span className="k">Account</span><span className="v mono">rslmc-nonroot</span></div>
                 </>
               ) : (
                 <div className="info-row"><span className="k">Java</span><span className="v">Temurin {form.javaMajor}</span></div>
@@ -427,18 +508,30 @@ export function CreateServerPage() {
           </Card>
           <div className="stack">
             <Card title="Before you continue" icon={<ShieldAlert size={12} />}>
-              <label className="checkbox-row">
-                <input type="checkbox" checked={form.acceptEula} onChange={(event) => setForm({ ...form, acceptEula: event.target.checked })} />
-                <span>
-                  I accept the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer noopener" style={{ textDecoration: "underline" }}>Minecraft End User Licence Agreement</a>.
-                  RSLMC writes <span className="mono">eula=true</span> only when this box is checked.
-                </span>
-              </label>
+              {appFamily ? (
+                <div className="row" style={{ gap: 8, alignItems: "flex-start" }}>
+                  <Check size={13} className="faint" style={{ marginTop: 2 }} />
+                  <span className="text-xs faint">
+                    No EULA applies to this server: it is not Minecraft software. The Minecraft EULA only
+                    covers Mojang's game server — you are responsible for whatever your own program does.
+                  </span>
+                </div>
+              ) : (
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={form.acceptEula} onChange={(event) => setForm({ ...form, acceptEula: event.target.checked })} />
+                  <span>
+                    I accept the <a href="https://www.minecraft.net/eula" target="_blank" rel="noreferrer noopener" style={{ textDecoration: "underline" }}>Minecraft End User Licence Agreement</a>.
+                    RSLMC writes <span className="mono">eula=true</span> only when this box is checked.
+                  </span>
+                </label>
+              )}
               <div className="divider" style={{ margin: "10px 0" }} />
               <div className="row" style={{ gap: 8, alignItems: "flex-start" }}>
                 <Download size={13} className="faint" style={{ marginTop: 2 }} />
                 <span className="text-xs faint">
-                  Creation downloads Java {form.javaMajor} (≈ 180 MB) and the server artifact, then verifies checksums. This can take a few minutes.
+                  {appFamily
+                    ? `Creation downloads ${appFamily === "python" ? "CPython" : "Node.js"} ${form.mcVersion} (≈ ${appFamily === "python" ? "30–60" : "40–50"} MB), verifies its published SHA-256, and writes a starter ${form.entryFile || (appFamily === "python" ? "main.py" : "index.js")}.`
+                    : `Creation downloads Java ${form.javaMajor} (≈ 180 MB) and the server artifact, then verifies checksums. This can take a few minutes.`}
                 </span>
               </div>
               <div className="row" style={{ gap: 8, alignItems: "flex-start", marginTop: 8 }}>
@@ -475,7 +568,7 @@ export function CreateServerPage() {
           </Button>
         )}
       </div>
-      {step === 6 && !form.acceptEula ? <div className="text-xs faint" style={{ marginTop: 8 }}>Accept the EULA to enable server creation.</div> : null}
+      {step === 6 && !appFamily && !form.acceptEula ? <div className="text-xs faint" style={{ marginTop: 8 }}>Accept the EULA to enable server creation.</div> : null}
     </>
   );
 }

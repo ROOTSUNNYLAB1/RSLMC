@@ -123,6 +123,76 @@ export async function ensureImage(
   return { ...image, present: true };
 }
 
+/* ------------------------------------------------------------------ */
+/* Python / Node.js images                                             */
+/* ------------------------------------------------------------------ */
+
+let allTagCache: { tags: Set<string>; at: number } | null = null;
+
+/**
+ * Every tag in the yolks repository, not just the Java ones.
+ *
+ * yolks also publishes `python_3.7 … python_3.11` and `nodejs_12 … nodejs_20`. Those are the Pterodactyl
+ * images the user asked to follow, so they are preferred; when a Python/Node line has no yolks tag the
+ * official image is used and the panel says which one — it never invents a tag that was never pushed.
+ */
+export async function yolksAllTags(timeoutMs = 8000): Promise<Set<string>> {
+  if (allTagCache && Date.now() - allTagCache.at < TAG_TTL_MS) return allTagCache.tags;
+  try {
+    const tokenResponse = await fetch(GHCR_TOKEN_URL, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!tokenResponse.ok) throw new Error(`token ${tokenResponse.status}`);
+    const token = (await tokenResponse.json() as { token?: string }).token;
+    if (!token) throw new Error("no token");
+    const tagsResponse = await fetch(GHCR_TAGS_URL, {
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!tagsResponse.ok) throw new Error(`tags ${tagsResponse.status}`);
+    const body = await tagsResponse.json() as { tags?: string[] };
+    const tags = new Set(body.tags ?? []);
+    allTagCache = { tags, at: Date.now() };
+    return tags;
+  } catch {
+    allTagCache = { tags: new Set(), at: Date.now() - TAG_TTL_MS + 60_000 };
+    return allTagCache.tags;
+  }
+}
+
+export interface AppImage {
+  family: "python" | "node";
+  version: string;
+  reference: string;
+  source: "yolks" | "official";
+  label: string;
+}
+
+/**
+ * The image for a Python/Node server.
+ *
+ * yolks first (`python_3.11`, `nodejs_20`), then the official slim image at the same line
+ * (`python:3.13-slim`, `node:22-slim`). Newer lines are exactly the case this handles: yolks stops at
+ * Python 3.11 and Node 20, so a panel that only knew yolks would silently lose Python 3.12+.
+ */
+export function appImageFor(family: "python" | "node", version: string, yolksTags: Set<string>): AppImage {
+  const minor = version.split(".").slice(0, 2).join(".");
+  const major = version.split(".")[0]!;
+  const tag = family === "python" ? `python_${minor}` : `nodejs_${major}`;
+  if (yolksTags.has(tag)) {
+    return {
+      family, version,
+      reference: `${YOLKS_REPO}:${tag}`,
+      source: "yolks",
+      label: `Pterodactyl yolks · ${family === "python" ? "Python" : "Node.js"} ${family === "python" ? minor : major}`,
+    };
+  }
+  return {
+    family, version,
+    reference: family === "python" ? `python:${minor}-slim` : `node:${major}-slim`,
+    source: "official",
+    label: `${family === "python" ? "Official python" : "Official node"} · ${family === "python" ? minor : major} (no yolks tag exists)`,
+  };
+}
+
 /** True when the local Docker has any image whose reference contains this Java major. */
 export function localImageForMajor(major: number): string | null {
   const result = dockerCommand(["image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], 15_000);

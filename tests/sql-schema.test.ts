@@ -121,11 +121,11 @@ describe("every INSERT compiles against the real schema", () => {
     const named = columns.split(",").map((c) => c.trim()).filter(Boolean);
     /*
      * Concrete counts, deliberately spelled out: this file exists because a column and a value drifted
-     * apart, and a count is what catches that. `runtime` and `docker_image` were the last two added.
+     * apart, and a count is what catches that. `entry_file` was the last column added (Python/Node).
      */
-    expect(named.length).toBe(26);
-    expect(parts.length).toBe(26);
-    expect(parts.filter((p) => p === "?").length).toBe(23);   // 23 bound parameters
+    expect(named.length).toBe(27);
+    expect(parts.length).toBe(27);
+    expect(parts.filter((p) => p === "?").length).toBe(24);   // 24 bound parameters
     expect(parts.filter((p) => p !== "?").length).toBe(3);    // 'installing', '', 1
     // eula_accepted is still a literal 1: the EULA is written by the create path, not by the request.
     const eulaIndex = named.indexOf("eula_accepted");

@@ -337,14 +337,31 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
           progress={memoryAllocated > 0 ? (memoryUsed / memoryAllocated) * 100 : 0}
           hintTitle={detail.enforcement?.memory.level === "enforced"
             ? `Memory: capped at ${server.memoryMb} MB by the kernel (cgroup memory.max). Cached files are not counted.`
-            : `Memory: only the Java heap is limited; native memory can go above ${server.memoryMb} MB. Cached files are not counted.`}
+            : server.app
+              ? `Memory: this host cannot cap it; usage is read from the process and reported, not limited.`
+              : `Memory: only the Java heap is limited; native memory can go above ${server.memoryMb} MB. Cached files are not counted.`}
         />
-        <StatCard
-          label="Players" icon={<Users2 size={12} />} accent="var(--green)"
-          value={metrics?.players ?? server.playersOnline} unit={`/ ${server.maxPlayers}`}
-          meta={<span>{metrics?.players ? "Online now" : "Nobody online"}</span>}
-          progress={server.maxPlayers > 0 ? ((metrics?.players ?? 0) / server.maxPlayers) * 100 : 0}
-        />
+        {/*
+          * A Python/Node server has no player count. Showing "0 / 20" next to it would be a metric for a
+          * game this server is not running, so the card reports the thing that actually matters instead.
+          */}
+        {server.app ? (
+          <StatCard
+            label="Isolation" icon={<ShieldCheck size={12} />} accent={server.app.isolated ? "var(--green)" : "var(--amber)"}
+            value={server.app.isolated ? "non-root" : "panel user"} unit=""
+            meta={<span>{server.app.isolated ? server.app.serviceUser ?? "service account" : "user switching unavailable"}</span>}
+            hintTitle={server.app.isolated
+              ? `This process runs as ${server.app.serviceUser}: the kernel switched to that account at spawn, and it has no sudo.`
+              : "The panel cannot switch users on this host, so the process runs as the panel's account. Use the Docker runtime for real isolation."}
+          />
+        ) : (
+          <StatCard
+            label="Players" icon={<Users2 size={12} />} accent="var(--green)"
+            value={metrics?.players ?? server.playersOnline} unit={`/ ${server.maxPlayers}`}
+            meta={<span>{metrics?.players ? "Online now" : "Nobody online"}</span>}
+            progress={server.maxPlayers > 0 ? ((metrics?.players ?? 0) / server.maxPlayers) * 100 : 0}
+          />
+        )}
         <StatCard
           label="Disk" icon={<HardDrive size={12} />} accent="var(--amber)"
           value={diskAllocated > 0 ? ((diskUsed / diskAllocated) * 100).toFixed(1) : "0"} unit="%"
@@ -379,6 +396,7 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
             height={380}
             canCommand={can("server.command")}
             compact
+            inputPlaceholder={server.app ? `Write to ${server.app.entryFile}'s stdin (Enter to send)` : undefined}
           />
         </Card>
 
@@ -410,9 +428,30 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
                     <span className="runtime-chip">Standalone</span>
                   ),
                 },
-                { key: "Software", value: server.software.charAt(0).toUpperCase() + server.software.slice(1) },
+                { key: "Software", value: server.app ? server.app.name : server.software.charAt(0).toUpperCase() + server.software.slice(1) },
                 { key: "Version", value: server.mcVersion },
-                { key: "Java", value: detail.java ? `${detail.java.vendor ?? "Temurin"} ${detail.java.major} (${detail.java.version})` : `Java ${server.javaMajor} (installed on start)` },
+                /*
+                 * A Python/Node server has no Java and no jar; what matters is which interpreter runs it,
+                 * which file it starts, and which account the kernel switched to. The last one is only
+                 * claimed when it is true — `isolated` comes from the host, not from a wish.
+                 */
+                ...(server.app
+                  ? [
+                      {
+                        key: "Interpreter",
+                        value: server.app.installed
+                          ? <span className="mono text-xs" title={server.app.interpreterPath ?? undefined}>{server.app.binary} {server.app.version}</span>
+                          : <span className="faint text-xs">{server.app.binary} {server.app.version} — not unpacked on this host yet (installed on start)</span>,
+                      },
+                      { key: "Entry file", value: <span className="mono text-xs">{server.app.entryFile}</span> },
+                      {
+                        key: "Runs as",
+                        value: server.app.isolated
+                          ? <span className="row-gap"><span className="runtime-chip">{server.app.serviceUser}</span><span className="faint text-xs">no sudo</span></span>
+                          : <span className="faint text-xs" style={{ cursor: "help" }} title="The panel cannot switch users on this host, so the process runs under the panel's own account. Start the panel as root on Linux, or use the Docker runtime, for real isolation.">panel account</span>,
+                      },
+                    ]
+                  : [{ key: "Java", value: detail.java ? `${detail.java.vendor ?? "Temurin"} ${detail.java.major} (${detail.java.version})` : `Java ${server.javaMajor} (installed on start)` }]),
                 { key: "Allocated RAM", value: `${server.memoryMb} MB` },
                 {
                   key: "CPU allocation",
@@ -489,6 +528,19 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
               }]}
             />
           </div>
+          {server.app ? (
+            <div>
+              <div className="row" style={{ marginBottom: 4 }}>
+                <span className="card-title"><ShieldCheck size={11} /> Process</span>
+              </div>
+              <div className="info-list">
+                <div className="info-row"><span className="k">Account</span><span className="v mono">{server.app.isolated ? server.app.serviceUser : "panel account"}</span></div>
+                <div className="info-row"><span className="k">Binary</span><span className="v mono">{server.app.binary} {server.app.version}</span></div>
+                <div className="info-row"><span className="k">Entry file</span><span className="v mono">{server.app.entryFile}</span></div>
+                <div className="info-row"><span className="k">Limits</span><span className="v">{limitSummary(detail.enforcement)}</span></div>
+              </div>
+            </div>
+          ) : (
           <div>
             <div className="row" style={{ marginBottom: 4 }}>
               <span className="card-title"><Users2 size={11} /> Players</span>
@@ -503,6 +555,7 @@ export function ServerOverviewPage({ serverId }: { serverId: number }) {
               series={[{ label: "Online players", color: "#a78bfa", points: history.map((point) => ({ ts: point.ts, value: point.players })) }]}
             />
           </div>
+          )}
         </div>
         <div className="row" style={{ marginTop: 12, gap: 14, flexWrap: "wrap" }}>
           <span className="text-xs faint">Disk {formatBytes(diskUsed)} of {formatBytes(diskAllocated)}</span>

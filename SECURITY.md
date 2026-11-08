@@ -326,6 +326,43 @@ mysterious.
 translation, quota only when supported, reference validation). `tests/docker-live.test.ts` starts a
 real container when `RSLMC_TEST_DOCKER=1` and reads the limits back from the daemon.
 
+## 1j. Python and Node.js servers — the service account (2026.11.04.10)
+
+Adding software that is *not* Minecraft added a new privilege boundary, and it is the interesting part
+of this round:
+
+* **A dedicated, unprivileged account.** App servers run as `rslmc-nonroot` (own home, generated
+  password, no sudo). The panel refuses to start them as its own account when that account is root, and
+  it *proves* what happened rather than asserting it: the uid is passed to `setuid` at spawn
+  (`Bun.spawn({ uid, gid })`, and the same pair in the relay plan), and the server page shows the
+  account only when both the account exists and the panel could switch to it.
+* **Escalation is removed, not promised.** `ensureServiceAccount()` checks the account's real group
+  membership and any `/etc/sudoers.d/<user>` file, and removes what it finds; the admin page reports
+  `sudo: unavailable` from that check, not from a constant.
+* **No invented password state.** With `chpasswd` available it is used; otherwise a crypt(3) hash from
+  `openssl passwd -6` is written into `/etc/shadow` through a temporary file and an atomic rename (a
+  half-written line in `/etc/shadow` locks out every account on the box, not just this one). When
+  neither tool exists the panel says the password was **not** set instead of showing a green tick.
+* **One interpreter, read-only for the servers that use it.** Interpreters are root-owned, world
+  readable/executable and shared per `(family, version)`. A server that could write into a shared
+  CPython could break every other server on that version.
+* **Path traversal needs execute, not ownership.** A `0700` data root under a home directory made
+  spawns fail with EACCES. The panel widens only the *execute* bit on the directories between the
+  account and its files (nothing becomes listable), records every widened path, and when it cannot
+  (not root) names the directory and the exact `chmod` that would fix it.
+* **The entry file cannot escape the server directory.** `../`, absolute paths, Windows drive paths and
+  a wrong extension are refused at creation and on every later edit — the value reaches a command line
+  and, in Docker, a path inside the container.
+* **No arbitrary shell.** The only command the panel runs for an app server is the family's dependency
+  install, as the server's own account, in the server's own directory. The console's input box writes to
+  the program's stdin and says exactly that.
+
+**Tests.** `tests/apps.test.ts` (27) covers the catalogue entries, the version parsing for both
+providers, the yolks→official image fallback, the entry-file rules, the interpreter environment
+(`PYTHONUNBUFFERED`, `PYTHONNOUSERSITE`, `--max-old-space-size` derived from the allocation), and the
+launch plan for both runtimes — including that an app server never gets a `java` command line or a
+`-Xmx` flag.
+
 ---
 
 ## 2. What the harness proves is already right

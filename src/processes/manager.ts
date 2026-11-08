@@ -14,7 +14,11 @@ import {
   containerNameFor, containerStatsAsync, dockerInvocation, imagePresent, inspectContainer, killContainer,
   probeDocker, pullImage, removeContainer,
 } from "../runtime/docker";
-import { imageForMajor } from "../runtime/images";
+import { appImageFor, imageForMajor, yolksAllTags } from "../runtime/images";
+import { APP_FAMILIES, isAppSoftware, type AppFamily } from "../apps/catalog";
+import { ensureInterpreter, installAppScaffold, interpreterExecutable, interpreterDirectory } from "../apps/interpreters";
+import { appCommand, appContainerBinary, appEnvironment, appLaunchSummary, normaliseEntryFile } from "../apps/launch";
+import { panelCanSwitchUser, ensureServiceAccount, handOverDirectory, serviceAccountState, serviceSpawnIdentity } from "../runtime/nonroot";
 import { sampleProcess, peekProcess } from "../resources/process-stats";
 import { directorySizeSync } from "../resources/host";
 import { cpuBudget, type CpuBudget } from "../resources/cpu-budget";
@@ -107,6 +111,10 @@ interface ServerRow {
   node_id: number;
   install_log: string | null;
   eula_accepted?: number;
+  /** Python/Node: the file the interpreter starts, relative to the server directory. */
+  entry_file?: string | null;
+  /** The account the process was last started as, when isolation was really applied. */
+  service_user?: string | null;
 }
 
 export function getServerRow(serverId: number): ServerRow {
@@ -387,6 +395,14 @@ export function findLaunchTarget(server: ServerRow): { jar: string | null; scrip
 }
 
 export function buildLaunchPlan(server: ServerRow): LaunchPlan {
+  /*
+   * Python and Node.js take a completely different road: there is no jar, no heap flag and no JVM.
+   * Dispatching here — rather than at every call site — keeps one place that knows what a server of
+   * each software family is started by.
+   */
+  if (isAppSoftware(server.software)) {
+    return buildAppLaunchPlan(server);
+  }
   const javaRuntime = server.java_runtime_id ? runtimeInfo(server.java_runtime_id) : null;
   const javaExe = resolveExecutable(javaRuntime) ?? "java";
   const directory = serverDirFor(server.uuid);
@@ -530,6 +546,82 @@ function buildDockerPlan(input: {
   return { command, cwd: directory, shellScript: null, preview, docker: { container, image, network, cpu } };
 }
 
+/**
+ * The launch plan for a Python/Node server.
+ *
+ * The interpreter is the one RSLMC installed for this exact version, not whatever `python3` happens to
+ * be on PATH — that is what makes "Python 3.11.9" on the server page a fact rather than a wish.
+ */
+function buildAppLaunchPlan(server: ServerRow): LaunchPlan {
+  const family = server.software as AppFamily;
+  const definition = APP_FAMILIES[family];
+  const version = server.mc_version;
+  const directory = serverDirFor(server.uuid);
+  const entryFile = normaliseEntryFile(server.entry_file ?? "", family);
+  const serverArgs = server.server_args?.trim() ? server.server_args.trim().split(/\s+/) : [];
+  const executable = interpreterExecutable(family, version) ?? join(interpreterDirectory(family, version), "bin", definition.binary);
+
+  if (server.runtime === "docker") {
+    return buildAppDockerPlan({ server, directory, entryFile, serverArgs, family });
+  }
+  const command = appCommand({ family, executable, entryFile, args: serverArgs });
+  return {
+    command,
+    cwd: directory,
+    shellScript: null,
+    preview: `${appLaunchSummary(family, version, entryFile)} (${executable})`,
+  };
+}
+
+/**
+ * The container variant. Same limits and same mount as a Java container, but the entrypoint is the
+ * interpreter the image ships and the console line says which image was chosen (yolks when the tag
+ * exists, the official image otherwise).
+ */
+function buildAppDockerPlan(input: {
+  server: ServerRow; directory: string; entryFile: string; serverArgs: string[]; family: AppFamily;
+}): LaunchPlan {
+  const { server, directory, entryFile, serverArgs, family } = input;
+  const container = containerNameFor(server.uuid);
+  const image = server.docker_image?.trim() || appImageFor(family, server.mc_version, new Set()).reference;
+  const network = process.env.RSLMC_DOCKER_NETWORK?.trim() || "bridge";
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const gid = typeof process.getgid === "function" ? process.getgid() : null;
+
+  const args: string[] = dockerInvocation(["run", "--rm", "-i", "--init", "--name", container]);
+  args.push("--memory", `${server.memory_mb}m`, "--memory-swap", `${server.memory_mb}m`);
+  const cpu = cpuBudget(server.cpu_percent, probeDocker().cpuCount);
+  args.push("--cpus", cpu.grantedCores.toFixed(2));
+  const quotaMb = server.disk_mb ?? 0;
+  if (quotaMb > 0 && server.docker_disk_quota) args.push("--storage-opt", `size=${quotaMb}m`);
+  /*
+   * The container runs as the panel's uid so it can write the bind-mounted directory — the same rule
+   * as a Java container. Inside the container that is an unprivileged user either way, which is the
+   * isolation Docker itself provides.
+   */
+  if (uid !== null && gid !== null) args.push("--user", `${uid}:${gid}`);
+  args.push("--label", "rslmc.server=1", "-v", `${directory}:/data`, "-w", "/data");
+  if (network === "host") args.push("--network", "host");
+  else args.push("-p", `${server.port}:${server.port}/tcp`);
+  // Unbuffered stdout so the console is live, exactly as in the standalone plan.
+  if (family === "python") args.push("-e", "PYTHONUNBUFFERED=1", "-e", "PYTHONNOUSERSITE=1");
+  else args.push("-e", "NODE_ENV=production", "-e", `NODE_OPTIONS=--max-old-space-size=${Math.max(64, Math.round(server.memory_mb * 0.75))}`);
+  args.push("-e", `RSLMC_SERVER_ID=${server.id}`, "-e", "TERM=xterm-256color");
+  args.push("--entrypoint", appContainerBinary(family), image);
+
+  const inner = [entryFile, ...serverArgs];
+  const cpuLabel = cpu.clamped
+    ? `cpus ${cpu.grantedCores.toFixed(2)} (of ${cpu.requestedCores.toFixed(2)} requested — host has ${cpu.hostCores.toFixed(2)})`
+    : `cpus ${cpu.grantedCores.toFixed(2)}`;
+  return {
+    command: [...args, ...inner],
+    cwd: directory,
+    shellScript: null,
+    preview: `docker run ${container} → ${image} | memory ${server.memory_mb} MB · ${cpuLabel} | ${inner.join(" ")}`,
+    docker: { container, image, network, cpu },
+  };
+}
+
 function prepareJvmArgsFile(server: ServerRow, directory: string): void {
   const file = join(directory, "user_jvm_args.txt");
   if (!existsSync(file)) return;
@@ -577,12 +669,18 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
     const directory = serverDirFor(server.uuid);
     if (!existsSync(directory)) throw new ApiException(400, "not_installed", "Server directory is missing — install the server first");
 
+    /*
+     * Python and Node.js have no EULA and no jar: their start path diverges here rather than later,
+     * because none of the Minecraft preconditions below (eula.txt, a server jar) can exist for them.
+     */
+    const isApp = isAppSoftware(server.software);
+
     // The EULA is accepted once, at creation (or through the EULA prompt). If the file went
     // missing — failed install, restored backup, wiped directory — restore it instead of
     // dead-ending the Start action with a confusing power error.
     const eula = join(directory, "eula.txt");
-    const eulaOk = existsSync(eula) && /eula\s*=\s*true/i.test(await Bun.file(eula).text());
-    if (!eulaOk) {
+    const eulaOk = isApp || (existsSync(eula) && /eula\s*=\s*true/i.test(await Bun.file(eula).text()));
+    if (!isApp && !eulaOk) {
       if (server.eula_accepted === 1) {
         writeFileAtomic(eula, "# Restored by RSLMC: the EULA was accepted for this server.\neula=true\n");
         systemLine(serverId, "eula.txt was missing — restored from the acceptance recorded when this server was created.");
@@ -596,12 +694,49 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
     const free = await isTcpPortFree(bindIp, server.port);
     if (!free) throw new ApiException(409, "port_in_use", `Port ${server.port} is already in use on ${bindIp}`);
 
+    /*
+     * App servers: make sure the interpreter for this exact version is unpacked, and work out which
+     * account the process will run as. Both answers go into the console before the process exists, so
+     * an operator never has to guess why isolation was or was not applied.
+     */
+    let spawnIdentity: { uid: number; gid: number; user: string } | null = null;
+    if (isApp) {
+      const family = server.software as AppFamily;
+      const definition = APP_FAMILIES[family];
+      /*
+       * A container server never uses the host interpreter — the image brings its own. Downloading a
+       * standalone CPython for it would be wasted bandwidth on every fresh machine.
+       */
+      if (server.runtime !== "docker" && !interpreterExecutable(family, server.mc_version)) {
+        systemLine(serverId, `${definition.name} ${server.mc_version} is not installed on this machine — installing it now…`);
+        await ensureInterpreter(family, server.mc_version, (stage, received, total) => {
+          if (total > 0) systemLine(serverId, `${stage} (${Math.round((received / total) * 100)}%)`);
+          else systemLine(serverId, stage);
+        });
+      }
+      if (panelCanSwitchUser()) {
+        const ensured = ensureServiceAccount();
+        const identity = serviceSpawnIdentity(ensured.state);
+        if (identity) {
+          spawnIdentity = identity;
+          const handed = handOverDirectory(directory, ensured.state);
+          if (handed.changed > 0) systemLine(serverId, `Directory ownership prepared for ${identity.user} (${handed.changed} paths).`);
+          systemLine(serverId, `Isolation: this process runs as ${identity.user} (uid ${identity.uid}), a password-protected account with no sudo.`);
+        } else {
+          systemLine(serverId, `Isolation unavailable: ${ensured.state.reason ?? "the service account could not be prepared"}. The process will run as the panel's account.`);
+        }
+      } else {
+        systemLine(serverId, "Isolation unavailable: the panel is not running as root, so it cannot switch to the service account. "
+          + "The process will run as the panel's account. Start the panel as root (as on a normal VPS) to get real isolation.");
+      }
+    }
+
     // Java runtime: resolve or install the exact major version this server requires.
     let runtimeId = server.java_runtime_id;
-    const runtime = runtimeId ? runtimeInfo(runtimeId) : null;
+    const runtime = isApp ? null : (runtimeId ? runtimeInfo(runtimeId) : null);
     // resolveExecutable() only proves the file exists — a runtime left truncated by an interrupted
     // extraction still fails at exec time with "libjli.so: cannot open shared object file".
-    if (!runtime || !runtimeIsUsable(runtime)) {
+    if (!isApp && (!runtime || !runtimeIsUsable(runtime))) {
       systemLine(serverId, `Java ${server.java_major} runtime is missing — installing Eclipse Temurin ${server.java_major}…`);
       const installed = await ensureRuntime(server.java_major, server.node_id);
       runtimeId = installed.id;
@@ -609,8 +744,8 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
       server.java_runtime_id = runtimeId;
     }
 
-    const target = findLaunchTarget(server);
-    if (!target.jar && !target.script) {
+    const target = isApp ? { jar: null, script: null } : findLaunchTarget(server);
+    if (!isApp && !target.jar && !target.script) {
       throw new ApiException(
         409, "not_installed",
         "This server's directory has no server jar, so there is nothing to launch. Run "
@@ -641,7 +776,10 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
         throw new ApiException(409, "docker_unavailable",
           `This server runs in Docker, but Docker is not usable right now: ${docker.reason ?? "the daemon is not answering"}.`);
       }
-      const image = server.docker_image?.trim() || imageForMajor(server.java_major, new Set()).reference;
+      const image = server.docker_image?.trim()
+        || (isApp
+          ? appImageFor(server.software as AppFamily, server.mc_version, await yolksAllTags()).reference
+          : imageForMajor(server.java_major, new Set()).reference);
       if (!imagePresent(image)) {
         systemLine(serverId, `Pulling ${image} — this only happens once per machine.`);
         const pulled = await pullImage(image, (line: string) => systemLine(serverId, `pull: ${line}`));
@@ -660,8 +798,13 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
     }
 
     const plan = buildLaunchPlan(server);
-    prepareJvmArgsFile(server, directory);
-    systemLine(serverId, `Starting ${softwareDefinition(server.software as any).name} ${server.mc_version} on ${server.bind_ip}:${server.port}`);
+    if (!isApp) prepareJvmArgsFile(server, directory);
+    if (isApp) {
+      const family = server.software as AppFamily;
+      systemLine(serverId, `Starting ${appLaunchSummary(family, server.mc_version, server.entry_file ?? APP_FAMILIES[family].entryFile)} on ${server.bind_ip}:${server.port}`);
+    } else {
+      systemLine(serverId, `Starting ${softwareDefinition(server.software as any).name} ${server.mc_version} on ${server.bind_ip}:${server.port}`);
+    }
     systemLine(serverId, `Launch: ${plan.preview}`);
 
     /*
@@ -715,6 +858,18 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
       RSLMC_SERVER_ID: String(serverId),
       ...(server.rcon_password ? { RSLMC_RCON_PASSWORD: server.rcon_password } : {}),
     };
+    if (isApp) {
+      const family = server.software as AppFamily;
+      const executable = interpreterExecutable(family, server.mc_version);
+      const account = serviceAccountState();
+      Object.assign(spawnEnv, appEnvironment({
+        family,
+        binDirectory: executable ? join(executable, "..") : null,
+        home: spawnIdentity ? (account.home ?? `/home/${account.user}`) : (process.env.HOME ?? directory),
+        memoryMb: server.memory_mb,
+        base: process.env as Record<string, string>,
+      }));
+    }
 
     /*
      * Start through the relay when possible. The relay is a detached process that owns the JVM, so
@@ -731,6 +886,7 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
         command: plan.command as string[],
         cwd: plan.cwd,
         env: spawnEnv,
+        identity: spawnIdentity,
         onLine: (line) => pushLine(serverId, {
           ts: line.ts,
           stream: line.stream === "system" ? "stdout" : line.stream,
@@ -757,6 +913,11 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
           stdout: "pipe",
           stderr: "pipe",
           env: { ...process.env, ...spawnEnv },
+          /*
+           * The kernel, not a promise: `uid`/`gid` make this child run as the service account. If the
+           * panel is not root this is absent, and the console has already said so.
+           */
+          ...(spawnIdentity ? { uid: spawnIdentity.uid, gid: spawnIdentity.gid } : {}),
           onExit(_proc, exitCode, signalCode) {
             handleExit(serverId, exitCode, signalCode);
           },
@@ -767,6 +928,17 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
         const message = err instanceof Error ? err.message : String(err);
         entry.state.lastError = message;
         systemLine(serverId, `Failed to spawn process: ${message}`);
+        /*
+         * EACCES here is almost always the service account being unable to *reach* the interpreter: every
+         * directory on the path needs execute permission for it. Name the cause instead of leaving a bare
+         * "permission denied" that reads like a bug in the panel.
+         */
+        if (spawnIdentity && /EACCES|permission denied/i.test(message)) {
+          systemLine(serverId,
+            `The service account ${spawnIdentity.user} cannot reach the interpreter or the server directory. `
+            + "Every directory on the path needs execute permission for other users; the panel widens them when it "
+            + "runs as root. Check the interpreter path above and the data directory's parent permissions.");
+        }
         throw new ApiException(500, "spawn_failed", `Could not start the server process: ${message}`);
       }
     }
@@ -793,6 +965,22 @@ async function startServerUnlocked(serverId: number, actor: string): Promise<voi
       readStream(serverId, direct.stderr as ReadableStream<Uint8Array> | undefined, "stderr", entry);
     }
     startMetrics(serverId, entry);
+
+    /*
+     * Readiness. Minecraft announces itself with `Done (…)!`; a Python script or a Node bot has no such
+     * protocol, so the honest definition for them is "the process is alive". Waiting for a line that will
+     * never come would leave the badge on STARTING forever and trip the startup warning for a healthy app.
+     */
+    if (isApp) {
+      entry.state.ready = true;
+      setStatus(serverId, "online");
+      run("UPDATE servers SET last_started_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", [serverId]);
+      recordActivity({
+        type: "server.started", serverId, target: server.name,
+        metadata: { pid: entry.state.pid, runtime: server.software, version: server.mc_version },
+      });
+      systemLine(serverId, "Running. App servers are reported online once the process is alive — there is no Minecraft-style ready line.");
+    }
 
     /*
      * Startup watchdog. This only *warns* — a slow host (first Paper boot remaps the server jar,
@@ -1244,7 +1432,7 @@ function noteCgroupAccounting(
       "Memory/CPU limits are cgroup settings, but this host's cgroup is not charging the server's "
       + "memory — usage is read from the process instead.";
     systemLine(serverId,
-      "This host's cgroup reports far less memory than the JVM holds (a partially delegated "
+      "This host's cgroup reports far less memory than the process really holds (a partially delegated "
       + "memory controller in a container). Memory usage is read from /proc instead; the limits "
       + "themselves are still configured.",
     );
@@ -1589,6 +1777,21 @@ export interface CreateServerOptions {
 }
 
 export async function installServer(opts: CreateServerOptions): Promise<{ jarFile: string; version: string; build: string | null; sha256: string | null; source: string; javaMajor: number }> {
+  /*
+   * Python/Node: "install" means the interpreter plus a starter entry file. No Java runtime is touched
+   * — installing a JDK for a Node bot would be a 200 MB download nobody asked for.
+   */
+  if (isAppSoftware(opts.software)) {
+    const family = opts.software as AppFamily;
+    const server = queryOne<{ entry_file: string | null }>("SELECT entry_file FROM servers WHERE id = ?", [opts.serverId]);
+    const entryFile = normaliseEntryFile(server?.entry_file ?? "", family);
+    await ensureInterpreter(family, opts.mcVersion, (stage, received, total) => opts.onProgress?.(stage, received, total));
+    await installAppScaffold(family, opts.mcVersion, opts.directory);
+    return {
+      jarFile: entryFile, version: opts.mcVersion, build: null, sha256: null,
+      source: APP_FAMILIES[family].source, javaMajor: 0,
+    };
+  }
   const runtime = await ensureRuntime(opts.javaMajor);
   const executable = resolveExecutable(runtime);
   if (!executable) throw new ApiException(500, "java_missing", "Java runtime could not be installed");

@@ -31,16 +31,24 @@ export function Sidebar({
     { to: "/servers", label: "Servers", icon: <ServerCog size={14} /> },
   ];
 
+  /*
+   * Python/Node servers have no plugins, worlds, players, map or server.properties. Rather than linking
+   * to pages that can only apologise, those links are absent — and the Minecraft-only server pages know
+   * how to explain themselves if reached directly.
+   */
+  const isApp = Boolean(server?.app);
   // Mirrors SERVER_PAGES in App.tsx: a link only exists when the page behind it would render.
   const serverNav: NavItem[] = server ? [
     { to: `/servers/${server.id}/overview`, label: "Overview", icon: <LayoutDashboard size={14} /> },
     { to: `/servers/${server.id}/console`, label: "Console", icon: <Terminal size={14} /> },
     { to: `/servers/${server.id}/files`, label: "Files", icon: <Files size={14} />, permission: "server.files" },
-    { to: `/servers/${server.id}/properties`, label: "Properties", icon: <FileCode2 size={14} />, permission: "server.files" },
-    { to: `/servers/${server.id}/players`, label: "Players", icon: <Users2 size={14} />, permission: "server.players" },
-    { to: `/servers/${server.id}/plugins`, label: "Plugins", icon: <Plug size={14} />, permission: "server.plugins" },
-    { to: `/servers/${server.id}/worlds`, label: "Worlds", icon: <Earth size={14} />, permission: "server.worlds" },
-    { to: `/servers/${server.id}/map`, label: "Map", icon: <MapIcon size={14} /> },
+    ...(isApp ? [] : [
+      { to: `/servers/${server.id}/properties`, label: "Properties", icon: <FileCode2 size={14} />, permission: "server.files" },
+      { to: `/servers/${server.id}/players`, label: "Players", icon: <Users2 size={14} />, permission: "server.players" },
+      { to: `/servers/${server.id}/plugins`, label: "Plugins", icon: <Plug size={14} />, permission: "server.plugins" },
+      { to: `/servers/${server.id}/worlds`, label: "Worlds", icon: <Earth size={14} />, permission: "server.worlds" },
+      { to: `/servers/${server.id}/map`, label: "Map", icon: <MapIcon size={14} /> },
+    ] as NavItem[]),
     { to: `/servers/${server.id}/backups`, label: "Backups", icon: <Archive size={14} />, permission: "server.backups" },
     { to: `/servers/${server.id}/activity`, label: "Activity", icon: <Activity size={14} /> },
     { to: `/servers/${server.id}/schedules`, label: "Schedules", icon: <ListChecks size={14} />, permission: "server.schedules" },

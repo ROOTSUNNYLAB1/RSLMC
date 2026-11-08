@@ -23,7 +23,11 @@ import { normalizeBindIp, isValidPort, isTcpPortFree } from "./net";
 import { ensureRuntime, resolveExecutable, runtimeInfo } from "../java/manager";
 import { notify } from "./notifications";
 import { containerNameFor, probeDocker, removeContainer } from "../runtime/docker";
-import { imageForMajor, yolksJavaTags } from "../runtime/images";
+import { appImageFor, imageForMajor, yolksAllTags, yolksJavaTags } from "../runtime/images";
+import { APP_FAMILIES, isAppSoftware, type AppFamily } from "../apps/catalog";
+import { ensureInterpreter, installAppScaffold, interpreterExecutable } from "../apps/interpreters";
+import { normaliseEntryFile, validateEntryFile } from "../apps/launch";
+import { panelCanSwitchUser, requiresIsolation, serviceAccountState } from "../runtime/nonroot";
 import type { ServerSummary, ServerStatus, UserPublic } from "../shared/types";
 
 export function mapServer(row: any): ServerSummary {
@@ -48,6 +52,23 @@ export function mapServer(row: any): ServerSummary {
     enforcement = stored ?? describeEnforcement();
   } catch {
     enforcement = describeEnforcement();
+  }
+  /*
+   * The stored notes describe the JVM: `-Xms/-Xmx` below the cgroup cap. A Python or Node process never
+   * sees those flags, so the note is rewritten to describe what is actually true for it — otherwise the
+   * server page would explain a heap that does not exist.
+   */
+  if (enforcement && isAppSoftware(row.software)) {
+    const node = row.software === "node";
+    enforcement = {
+      ...enforcement,
+      memory: {
+        ...enforcement.memory,
+        note: enforcement.memory.level === "enforced"
+          ? `Total process memory is capped by the kernel for the server's cgroup${node ? `; Node is started with --max-old-space-size=${Math.max(64, Math.round((row.memory_mb ?? 0) * 0.75))} MB, derived from the same allocation` : "; Python has no heap flag, the cap applies to the whole process tree"}.`
+          : `${enforcement.memory.note.replace(/RSLMC sets -Xms\/-Xmx[^.]*\./g, "")} This host cannot enforce it, so the panel reports real usage without claiming a cap.`.trim(),
+      },
+    };
   }
 
   return {
@@ -87,6 +108,28 @@ export function mapServer(row: any): ServerSummary {
     ),
     javaMajor: runtime?.major ?? row.java_major,
     javaRuntimeId: row.java_runtime_id,
+    /*
+     * Python/Node servers report what actually starts them. `installed` is measured on disk, not
+     * copied from the database: an interpreter removed by hand must show as missing before the
+     * operator presses Start and gets an error.
+     */
+    app: isAppSoftware(row.software) ? (() => {
+      const family = row.software as AppFamily;
+      const definition = APP_FAMILIES[family];
+      const executable = interpreterExecutable(family, row.mc_version);
+      const state = serviceAccountState();
+      return {
+        family,
+        name: definition.name,
+        version: row.mc_version,
+        entryFile: row.entry_file?.trim() || definition.entryFile,
+        interpreterPath: executable,
+        installed: executable !== null,
+        binary: definition.binary,
+        serviceUser: requiresIsolation(row.software) && state.exists ? state.user : null,
+        isolated: requiresIsolation(row.software) && state.exists && state.canIsolate,
+      };
+    })() : null,
     autoStart: row.auto_start === 1,
     crashRecovery: row.crash_recovery === 1,
     createdAt: row.created_at,
@@ -372,6 +415,11 @@ export interface CreateServerInput {
   runtime?: "standalone" | "docker";
   /** Java image to run in the container; resolved from the major when omitted. */
   dockerImage?: string | null;
+  /**
+   * Python/Node only: the file the interpreter starts, relative to the server directory.
+   * Defaults to `main.py` / `index.js`.
+   */
+  entryFile?: string;
 }
 
 /**
@@ -429,8 +477,34 @@ export function releaseAllocations(serverId: number): void {
  * reported over WebSockets.
  */
 export async function createServer(input: CreateServerInput, actor: string): Promise<{ server: ServerSummary; installId: string }> {
-  if (!input.acceptEula) throw new ApiException(400, "eula_required", "You must accept the Minecraft EULA to create a server");
   const definition = softwareDefinition(input.software as any);
+  /*
+   * Python and Node.js have no EULA and no Minecraft version: the "version" is the interpreter line.
+   * Everything else in this function (allocation, limits, directory, row) is deliberately identical, so
+   * an app server is a first-class server rather than a second kind of record.
+   */
+  const isApp = isAppSoftware(input.software);
+  if (!isApp && !input.acceptEula) {
+    throw new ApiException(400, "eula_required", "You must accept the Minecraft EULA to create a server");
+  }
+  let entryFile: string | null = null;
+  if (isApp) {
+    const family = input.software as AppFamily;
+    const problem = validateEntryFile(input.entryFile ?? "", family);
+    if (problem) throw new ApiException(400, "invalid_entry_file", problem.message);
+    entryFile = normaliseEntryFile(input.entryFile ?? "", family);
+    // Refuse a version that does not exist for this platform at creation time, not at first start.
+    const { listAppVersions } = await import("../apps/catalog");
+    const versions = await listAppVersions(family).catch(() => []);
+    const match = versions.find((version) => version.version === input.mcVersion);
+    if (versions.length > 0 && !match) {
+      throw new ApiException(400, "version_unavailable",
+        `${definition.name} ${input.mcVersion} is not published for this machine by ${APP_FAMILIES[family].source}.`);
+    }
+    if (match?.unavailableReason) {
+      throw new ApiException(400, "version_unavailable", `${definition.name} ${input.mcVersion}: ${match.unavailableReason}`);
+    }
+  }
   if (!/^[A-Za-z0-9 _.\-]{2,60}$/.test(input.name)) throw new ApiException(400, "invalid_name", "Server name may contain letters, numbers, spaces, dot, dash and underscore");
   if (input.memoryMb < MIN_ALLOCATION_MB) {
     throw new ApiException(400, "invalid_memory", `Memory must be at least ${MIN_ALLOCATION_MB} MB`);
@@ -479,18 +553,19 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
   const owner = queryOne<{ id: number }>("SELECT id FROM users WHERE id = ?", [input.ownerId]);
   if (!owner) throw new ApiException(400, "invalid_owner", "Owner not found");
 
-  const javaMajor = input.javaMajor ?? javaMajorForMcVersion(input.mcVersion);
+  // Non-JVM software has no Java major; 0 is stored so nothing renders "Java 0" anywhere.
+  const javaMajor = isApp ? 0 : (input.javaMajor ?? javaMajorForMcVersion(input.mcVersion));
   // Optimised defaults instead of an empty flag list: Aikar's G1GC set for game servers, the small
   // proxy set for Velocity/BungeeCord, SerialGC on tiny heaps. A user-supplied string always wins.
-  if (input.jvmArgs && /-Xm[sx](\d|\s|=|$)/.test(input.jvmArgs)) {
+  if (!isApp && input.jvmArgs && /-Xm[sx](\d|\s|=|$)/.test(input.jvmArgs)) {
     throw new ApiException(400, "memory_flags_in_jvm_args",
       "Remove -Xms / -Xmx from the JVM flags: the heap size comes from the memory allocation.");
   }
-  if (input.jvmArgs && HEAP_OVERRIDE_PATTERN.test(input.jvmArgs)) {
+  if (!isApp && input.jvmArgs && HEAP_OVERRIDE_PATTERN.test(input.jvmArgs)) {
     throw new ApiException(400, "memory_flags_in_jvm_args",
       "Remove -XX:MaxHeapSize / -XX:InitialHeapSize / -XX:MaxRAMPercentage from the JVM flags: the heap size comes from the memory allocation.");
   }
-  const jvmArgs = input.jvmArgs?.trim() ? input.jvmArgs.trim() : defaultJvmArgsFor(input.software as ServerSoftwareId, input.memoryMb);
+  const jvmArgs = isApp ? "" : (input.jvmArgs?.trim() ? input.jvmArgs.trim() : defaultJvmArgsFor(input.software as ServerSoftwareId, input.memoryMb));
   const uuid = randomUUID();
   const enforcement = describeEnforcement();
 
@@ -507,9 +582,14 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
       throw new ApiException(409, "docker_unavailable",
         `This server was requested as a Docker container, but Docker is not usable here: ${docker.reason ?? "the daemon is not answering"}.`);
     }
-    // Resolve against the registry's live tag list, so a yolks image is preferred when it exists and
-    // the Temurin fallback is only used when it does not.
-    dockerImage = input.dockerImage?.trim() || imageForMajor(javaMajor, await yolksJavaTags()).reference;
+    /*
+     * Resolve against the registry's live tag list, so a yolks image is preferred when it exists and
+     * the official image only when it does not. For Python/Node this is the difference between
+     * `yolks:python_3.11` and `python:3.13-slim` — both correct, but the operator should know which.
+     */
+    dockerImage = input.dockerImage?.trim() || (isApp
+      ? appImageFor(input.software as AppFamily, input.mcVersion, await yolksAllTags()).reference
+      : imageForMajor(javaMajor, await yolksJavaTags()).reference);
   }
 
   // The server row and its allocation are written together: a failure here must not leave a
@@ -518,14 +598,16 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
     const id = insert(
       `INSERT INTO servers (uuid, name, description, icon, owner_id, node_id, software, software_version, mc_version,
         java_major, status, memory_mb, cpu_percent, disk_mb, bind_ip, port, public_host, public_port,
-        jvm_args, server_args, auto_start, crash_recovery, enforcement, eula_accepted, runtime, docker_image)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        jvm_args, server_args, auto_start, crash_recovery, enforcement, eula_accepted, runtime, docker_image, entry_file)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'installing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       [
         uuid, input.name, input.description ?? null, input.icon ?? null, input.ownerId, input.nodeId,
         input.software, input.mcVersion, javaMajor, input.memoryMb, input.cpuPercent, input.diskMb,
-        bindIp, input.port, publicHost, publicPort, jvmArgs, input.serverArgs ?? "nogui",
+        bindIp, input.port, publicHost, publicPort, jvmArgs,
+        // `nogui` is a Minecraft flag; passing it to a Python program would be an argument it never asked for.
+        input.serverArgs ?? (isApp ? "" : "nogui"),
         input.autoStart ? 1 : 0, input.crashRecovery ? 1 : 0, JSON.stringify(enforcement),
-        runtime, dockerImage,
+        runtime, dockerImage, entryFile,
       ],
     );
     reserveAllocation(input.nodeId, bindIp, input.port, id, `Primary allocation for ${input.name}`);
@@ -595,11 +677,18 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
   const directory = serverDir(uuid);
   try {
     mkdirSync(directory, { recursive: true });
-    writeFileAtomic(join(directory, "server.properties"), initialServerProperties(input));
-    writeFileAtomic(join(directory, "ops.json"), "[]\n");
-    writeFileAtomic(join(directory, "whitelist.json"), "[]\n");
-    writeFileAtomic(join(directory, "banned-players.json"), "[]\n");
-    writeFileAtomic(join(directory, "banned-ips.json"), "[]\n");
+    /*
+     * A Python or Node server gets none of the Minecraft files. Writing `server.properties` and an
+     * empty `ops.json` into an app directory was harmless but confusing, and it made the panel treat
+     * the directory as a Minecraft one in the file manager's "known file" list.
+     */
+    if (!isApp) {
+      writeFileAtomic(join(directory, "server.properties"), initialServerProperties(input));
+      writeFileAtomic(join(directory, "ops.json"), "[]\n");
+      writeFileAtomic(join(directory, "whitelist.json"), "[]\n");
+      writeFileAtomic(join(directory, "banned-players.json"), "[]\n");
+      writeFileAtomic(join(directory, "banned-ips.json"), "[]\n");
+    }
   } catch (error) {
     // Roll the record back: a server whose directory could not be prepared must not linger.
     run("DELETE FROM servers WHERE id = ?", [serverId]);
@@ -619,9 +708,100 @@ export async function createServer(input: CreateServerInput, actor: string): Pro
   const installId = randomUUID();
   const server = getServer(serverId);
   if (input.install !== false) {
-    void runInstall(serverId, installId, definition.name, input.mcVersion, javaMajor, directory, serverId);
+    if (isApp) {
+      void runAppInstall(serverId, installId, input.software as AppFamily, input.mcVersion, entryFile!, directory);
+    } else {
+      void runInstall(serverId, installId, definition.name, input.mcVersion, javaMajor, directory, serverId);
+    }
   }
   return { server, installId };
+}
+
+/**
+ * Installation for a Python/Node server.
+ *
+ * There is nothing to download *into* the server directory: what has to exist is the interpreter, and
+ * that is installed once per (family, version) and shared. So the work here is (1) make the interpreter
+ * available, (2) scaffold an entry file the operator can immediately run, (3) hand the directory to the
+ * service account so the sealed process can write its own files.
+ *
+ * The service account is created here rather than at boot because creating a system user is a real
+ * change to the machine: it happens when an operator actually asks for a Python/Node server.
+ */
+async function runAppInstall(
+  serverId: number,
+  installId: string,
+  family: AppFamily,
+  version: string,
+  entryFile: string,
+  directory: string,
+): Promise<void> {
+  const definition = APP_FAMILIES[family];
+  const publish = (label: string, progress: number, total: number, done = false, error?: string) => {
+    bus.publish(serverTopic(serverId), {
+      type: "progress", kind: "install", id: installId, label, progress, total, done, error,
+    });
+  };
+  try {
+    publish(`Preparing ${definition.name} ${version}`, 0, 0);
+    const interpreter = await ensureInterpreter(family, version, (stage, received, total) => publish(stage, received, total));
+
+    publish(`Writing ${entryFile}`, 0, 0);
+    await installAppScaffold(family, version, directory);
+    run("UPDATE servers SET entry_file = ? WHERE id = ?", [entryFile, serverId]);
+
+    /*
+     * Hand the files to the service account. Only when it exists: on a host where the panel cannot
+     * create or switch to another user, the server runs under the panel's account and the UI says so
+     * instead of claiming isolation it does not have.
+     */
+    let isolationNote = "Runs under the panel's own account — this host cannot create a service account (the panel is not root).";
+    if (panelCanSwitchUser()) {
+      const { ensureServiceAccount, handOverDirectory } = await import("../runtime/nonroot");
+      const ensured = ensureServiceAccount();
+      if (ensured.state.exists) {
+        const handed = handOverDirectory(directory, ensured.state);
+        run("UPDATE servers SET service_user = ? WHERE id = ?", [ensured.state.user, serverId]);
+        isolationNote = `Runs as ${ensured.state.user} (uid ${ensured.state.uid}) — the process cannot touch the panel's files or escalate.`
+          + (handed.changed > 0 ? ` Ownership handed over for ${handed.changed} path${handed.changed === 1 ? "" : "s"}.` : "");
+        if (ensured.password) isolationNote += ` A password was generated for ${ensured.state.user}; it is shown once on the Runtime page.`;
+        for (const note of ensured.notes) systemLine(serverId, note);
+      } else {
+        isolationNote = ensured.state.reason ?? isolationNote;
+      }
+    }
+    systemLine(serverId, isolationNote);
+
+    const softwareVersion = interpreter.version;
+    run(
+      `UPDATE servers SET status = 'offline', installed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+        software_version = ?, java_runtime_id = NULL, install_log = NULL WHERE id = ?`,
+      [softwareVersion, serverId],
+    );
+    publish(`${definition.name} ${version} ready`, 1, 1, true);
+    recordActivity({
+      type: "server.installed", serverId, target: version,
+      metadata: { runtime: definition.name, interpreter: interpreter.path, entryFile },
+    });
+    notify({
+      title: `Server installed: ${queryOne<{ name: string }>("SELECT name FROM servers WHERE id = ?", [serverId])?.name}`,
+      body: `${definition.name} ${version} is ready — ${entryFile} will be started when you press Start.`,
+      severity: "success", kind: "server_installed", link: `/servers/${serverId}/overview`,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[rslmc] app install failed for server #${serverId}: ${message}`);
+    if (isRunning(serverId)) {
+      run("UPDATE servers SET install_log = ? WHERE id = ?", [message.slice(0, 2000), serverId]);
+    } else {
+      run("UPDATE servers SET status = 'error', install_log = ? WHERE id = ?", [message.slice(0, 2000), serverId]);
+    }
+    publish("Installation failed", 0, 0, true, message.slice(0, 2000));
+    notify({
+      title: `Installation failed: ${queryOne<{ name: string }>("SELECT name FROM servers WHERE id = ?", [serverId])?.name}`,
+      body: message.slice(0, 300), severity: "error", kind: "server_install_failed", link: `/servers/${serverId}/console`,
+    });
+  }
 }
 
 async function runInstall(
@@ -858,11 +1038,11 @@ const HEAP_OVERRIDE_PATTERN =
  * column and nothing else — but only while nothing is running: changing the launch method under a live
  * process would leave the panel tracking a JVM it can no longer stop.
  */
-export function updateServerRuntime(
+export async function updateServerRuntime(
   serverId: number,
   input: { runtime: "standalone" | "docker"; dockerImage?: string | null },
   actor: string,
-): ServerSummary {
+): Promise<ServerSummary> {
   const row = queryOne<any>("SELECT * FROM servers WHERE id = ?", [serverId]);
   if (!row) throw new ApiException(404, "server_not_found", "Server not found");
   if (isRunning(serverId)) {
@@ -876,7 +1056,9 @@ export function updateServerRuntime(
     }
   }
   const image = input.runtime === "docker"
-    ? (input.dockerImage?.trim() || imageForMajor(Number(row.java_major), new Set()).reference)
+    ? (input.dockerImage?.trim() || (isAppSoftware(row.software)
+        ? appImageFor(row.software as AppFamily, row.mc_version, await yolksAllTags()).reference
+        : imageForMajor(Number(row.java_major), new Set()).reference))
     : null;
   run(
     "UPDATE servers SET runtime = ?, docker_image = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
@@ -901,8 +1083,23 @@ export function updateServerSettings(
     diskMb: "disk_mb", jvmArgs: "jvm_args", serverArgs: "server_args", autoStart: "auto_start",
     crashRecovery: "crash_recovery", port: "port", bindIp: "bind_ip",
     publicHost: "public_host", publicPort: "public_port",
+    // Python/Node only; validated below so it can never point outside the server directory.
+    entryFile: "entry_file",
   };
   const warnings: string[] = [];
+  /*
+   * The entry file is only meaningful for interpreter-run software, and it is a path that ends up on a
+   * command line — so it is validated here rather than trusted from the request.
+   */
+  if (patch.entryFile !== undefined) {
+    if (!isAppSoftware(row.software)) {
+      throw new ApiException(400, "not_an_app_server",
+        "Entry files apply to Python and Node.js servers only; this server is started from a Minecraft jar.");
+    }
+    const problem = validateEntryFile(String(patch.entryFile ?? ""), row.software as AppFamily);
+    if (problem) throw new ApiException(400, "invalid_entry_file", problem.message);
+    patch = { ...patch, entryFile: normaliseEntryFile(String(patch.entryFile ?? ""), row.software as AppFamily) };
+  }
   /*
    * -Xms/-Xmx are derived from the memory allocation and always placed ahead of these flags, so a
    * hand-written "-Xmx" here would build an invalid command line ("Initial heap size set to a
@@ -1024,7 +1221,18 @@ export function reinstallServer(serverId: number, actor: string, preserveData: b
   }
   run("UPDATE servers SET status = 'installing', installed_at = NULL WHERE id = ?", [serverId]);
   const installId = randomUUID();
-  void runInstall(serverId, installId, softwareDefinition(row.software as any).name, row.mc_version, row.java_major, directory, serverId);
+  /*
+   * Reinstall means different things per software family: a Minecraft server re-downloads its jar, while
+   * a Python/Node server re-verifies its interpreter and writes the starter files back. Sending the app
+   * server down the Minecraft path failed with "Java 0 is not a selectable major version".
+   */
+  if (isAppSoftware(row.software)) {
+    const family = row.software as AppFamily;
+    const entry = normaliseEntryFile(row.entry_file ?? "", family);
+    void runAppInstall(serverId, installId, family, row.mc_version, entry, directory);
+  } else {
+    void runInstall(serverId, installId, softwareDefinition(row.software as any).name, row.mc_version, row.java_major, directory, serverId);
+  }
   recordActivity({ type: "server.reinstalled", serverId, target: row.name, actorName: actor, metadata: { preserveData } });
   return { installId };
 }

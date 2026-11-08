@@ -42,6 +42,11 @@ export const SERVER_ROUTE_PERMISSIONS: ServerRouteRule[] = [
   // Reachability of the game port: needs no more than being able to see the server.
   { method: "GET", path: "/api/servers/:id/ping", permission: ACCESS },
   { method: "PATCH", path: "/api/servers/:id/runtime", permission: "server.settings" },
+  /*
+   * Dependency install for Python/Node servers (pip/npm in the server directory). It writes files, so it
+   * needs `server.settings` — the same right that can change the startup command in the first place.
+   */
+  { method: "POST", path: "/api/servers/:id/app/dependencies", permission: "server.settings" },
 
   { method: "GET", path: "/api/servers/:id/properties", permission: ACCESS },
   { method: "PUT", path: "/api/servers/:id/properties", permission: ["server.settings", "server.files"] },
