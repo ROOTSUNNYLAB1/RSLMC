@@ -353,11 +353,15 @@ of this round:
 * **The entry file cannot escape the server directory.** `../`, absolute paths, Windows drive paths and
   a wrong extension are refused at creation and on every later edit — the value reaches a command line
   and, in Docker, a path inside the container.
+* **Stopping is a signal, not a word.** `stop`, `restart` and panel shutdown all go through one
+  helper: Minecraft gets the `stop` console command, Python/Node get `SIGTERM` and a 15 s grace period
+  before the existing escalation. Writing `stop` to an app's stdin previously left it in `stopping`
+  until the timeout killed it — the panel would have called that a graceful stop.
 * **No arbitrary shell.** The only command the panel runs for an app server is the family's dependency
   install, as the server's own account, in the server's own directory. The console's input box writes to
   the program's stdin and says exactly that.
 
-**Tests.** `tests/apps.test.ts` (27) covers the catalogue entries, the version parsing for both
+**Tests.** `tests/apps.test.ts` (33) covers the catalogue entries, the version parsing for both
 providers, the yolks→official image fallback, the entry-file rules, the interpreter environment
 (`PYTHONUNBUFFERED`, `PYTHONNOUSERSITE`, `--max-old-space-size` derived from the allocation), and the
 launch plan for both runtimes — including that an app server never gets a `java` command line or a

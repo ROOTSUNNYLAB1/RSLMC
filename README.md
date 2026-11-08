@@ -591,13 +591,23 @@ console, same file manager, same backups, same schedules.
   interpreter version, the account the process runs as, and a real **Install dependencies** action that
   runs `pip install -r requirements.txt` / `npm install` as that same account.
 * **The console writes to your program's stdin.** That is what the input box does — it is not a shell,
-  and the placeholder says so rather than promising a terminal.
+  and the placeholder says so rather than promising a terminal. Nothing else is ever written to it:
+  **Stop, Restart and panel shutdown send `SIGTERM`** to a Python/Node process and give it 15 seconds to
+  exit, because a Minecraft-style `stop` command means nothing to a program that does not read stdin.
+  (Writing `stop` at it left the server in `stopping` until the timeout force-killed it — a crash with
+  a friendlier label.) The console says which signal was sent, and a program that ignores SIGTERM is
+  terminated after the grace period with that stated too.
+* **A starter that teaches the two things that matter.** A new server's `main.py` / `index.js` echoes
+  console input back and handles `SIGTERM`, so an operator can see the stdin contract and a clean
+  shutdown before replacing it with their own program.
 * **Optional Docker runtime.** The same first question ("Standalone or Docker?") applies: Pterodactyl
   **yolks** images are preferred (`python_3.7–3.11`, `nodejs_12–20`), and for lines yolks never
   published (Python 3.12+, Node 21+) the official `python:3.x-slim` / `node:x-slim` image is used — the
   wizard shows which one, and why.
 
 ![Running Node.js server, with real isolation](docs/screenshots/app-server-overview.png)
+
+![A Python server's console: real interpreter, SIGTERM stop, stdin echo](docs/screenshots/app-python-console.png)
 
 The interpreter and the account are managed under **Admin → App Runtimes**, next to Java Runtimes:
 which versions are installed here, which versions upstream publishes, and the service account's real
