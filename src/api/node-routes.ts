@@ -46,6 +46,25 @@ export function publicNode(node: NodeRow) {
     online: nodeIsOnline(node),
     // Never the key itself — only whether one is stored, so the UI can offer "rotate".
     hasKey: Boolean(node.agent_key),
+    /*
+     * Cloudflare Tunnel state, summarised for the node card. The token is never part of this: the UI
+     * only needs to know that one is stored, which hostname is published, and whether it is up.
+     */
+    tunnel: (() => {
+      const row = queryOne<{ mode: string; hostname: string | null; status: string; enabled: number }>(
+        "SELECT mode, hostname, status, enabled FROM node_tunnels WHERE node_id = ?", [node.id],
+      );
+      if (row) return { configured: true, mode: row.mode, hostname: row.hostname, status: row.status, enabled: row.enabled === 1, cached: false };
+      /*
+       * A remote node keeps its tunnel state on its own machine; this controller remembers the last
+       * answer (migrations/019). Showing that — marked as cached — beats showing "no tunnel" for a node
+       * that simply cannot be reached at the moment.
+       */
+      if (node.tunnel_hostname) {
+        return { configured: true, mode: node.tunnel_mode, hostname: node.tunnel_hostname, status: node.tunnel_status ?? "unknown", enabled: true, cached: true, seenAt: node.tunnel_seen_at };
+      }
+      return { configured: false, mode: null, hostname: null, status: "stopped", enabled: false, cached: false };
+    })(),
     serverCount: queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM servers WHERE node_id = ?", [node.id])?.c ?? 0,
     // Servers this controller has linked to that node (their remote ids).
     linkedServers: query<{ server_id: number }>("SELECT server_id FROM node_server_links WHERE node_id = ?", [node.id]).length,

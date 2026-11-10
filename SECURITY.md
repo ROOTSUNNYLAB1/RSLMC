@@ -369,6 +369,48 @@ launch plan for both runtimes — including that an app server never gets a `jav
 
 ---
 
+
+## 1k. Cloudflare Tunnel for nodes — the stored credential (2026.11.04.20)
+
+A tunnel is a credential held long-term: `cloudflared` needs the exact token on every start. That is a
+different problem from a password (hashed) or an agent key (compared by hash), and it is worth writing
+down precisely because "we need to read it back" is how secrets end up in plain text.
+
+* **Sealed at rest, authenticated.** Tokens are encrypted with AES-256-GCM, key derived with scrypt from
+  the panel secret (`RSLMC_SECRET`, else `<data>/secrets/panel.key`, written 0600). GCM means a tampered
+  row fails to open instead of decrypting to a wrong token that Cloudflare then rejects confusingly. The
+  key is not in the database, so a copied `rslmc.db` is not enough to decrypt anything.
+* **Never returned, never logged.** No endpoint sends a token back — only `hasToken` and an 8-character
+  fingerprint of the ciphertext, so two tokens can be told apart. `cloudflared`'s output is kept in a
+  bounded buffer (300 lines) with 40+ character runs redacted, because the command line itself contains
+  the token and an operator debugging for hours should not be leaking it into screenshots.
+* **Validated before it reaches Cloudflare.** A typed hostname is normalised (scheme, trailing slash,
+  port, whitespace) and refused when it cannot work: an IP literal, `localhost`, a bare label, or a
+  `trycloudflare.com` name in token mode (DNS is not ours to point at those — the *only* accepted
+  quick-tunnel hostname is one Cloudflare itself announced in the log).
+* **No shell, no arbitrary command.** Exactly one argv is built — `tunnel --no-autoupdate run --token …`
+  or `tunnel --no-autoupdate --url http://127.0.0.1:<port>` — and the binary is spawned without a shell.
+  The binary path comes from `RSLMC_CLOUDFLARED_PATH`, the panel's own `<data>/bin`, or `PATH`, and the
+  version is probed before use.
+* **The download is verified for what it is.** Cloudflare publishes no checksum for the
+  `releases/latest/download` shortcut, so the panel does not claim a signature check: it requires a
+  plausible size (> 5 MB), runs `cloudflared --version` on the downloaded file, deletes it if that fails,
+  and renames into place only then. The dialog states the limit of the verification.
+* **`/api/agent/ping` is the one unauthenticated route added here**, and it returns
+  `{ ok, product: "RSLMC" }` and nothing else — no version, no hostname, no counts. It exists so a fresh
+  tunnel can be verified before any key is in place.
+* **A node edit cannot create a self-loop.** `PATCH /api/nodes/:id` now accepts the address fields (it
+  previously did not, which made a moved node unfixable from the UI) and runs the same self-loop guard
+  on the resulting address, so an edit cannot turn this panel into a node of itself.
+* **Cached, and labelled as cached.** The controller remembers the last hostname a node reported so the
+  address can still be repaired while that node is unreachable — and every message built from that cache
+  says it is the last reported value, including that a temporary hostname will have changed.
+
+**Tests.** `tests/tunnels.test.ts` (13) covers sealing/opening, tamper rejection, key mismatch,
+fingerprinting, hostname normalisation and refusal, quick-hostname parsing, log redaction, argv
+construction (including the no-token refusal), the platform→asset mapping, and the default-port rule for
+node addresses.
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |

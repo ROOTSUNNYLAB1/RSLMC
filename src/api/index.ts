@@ -9,6 +9,7 @@ import { registerFileRoutes } from "./file-routes";
 import { registerAdminRoutes } from "./admin-routes";
 import { registerPanelRoutes } from "./panel-routes";
 import { registerNodeRoutes } from "./node-routes";
+import { registerTunnelRoutes } from "./tunnel-routes";
 import { isAgentKey, nodeControllerUser, bumpAccepted, recordAgentEvent } from "../nodes/agent";
 import { proxyServerRequest } from "../nodes/proxy";
 
@@ -19,6 +20,7 @@ registerFileRoutes(api);
 registerAdminRoutes(api);
 registerPanelRoutes(api);
 registerNodeRoutes(api);
+registerTunnelRoutes(api);
 
 /** Routes that are reachable without a session. */
 const PUBLIC_ROUTES = new Set([
@@ -31,6 +33,8 @@ const PUBLIC_ROUTES = new Set([
   "GET /api/auth/me",
   "GET /api/setup/status",
   "GET /api/setup/enforcement",
+  // A fresh Cloudflare tunnel is verified by asking the public hostname this, before any key exists.
+  "GET /api/agent/ping",
 ]);
 
 const PUBLIC_ROUTE_PATTERNS = new Set([

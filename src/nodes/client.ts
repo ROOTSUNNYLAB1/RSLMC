@@ -30,6 +30,11 @@ export interface NodeRow {
   last_checked_at: string | null;
   api_version: number;
   meta: string | null;
+  /* Cached view of the node's Cloudflare tunnel — see migrations/019. */
+  tunnel_hostname: string | null;
+  tunnel_mode: string | null;
+  tunnel_status: string | null;
+  tunnel_seen_at: string | null;
 }
 
 // The controller stores the node's agent key encrypted-at-rest? No: it has to send it on every
@@ -40,7 +45,14 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export function nodeBaseUrl(node: Pick<NodeRow, "scheme" | "fqdn" | "port">): string {
   const scheme = node.scheme === "https" ? "https" : "http";
-  return `${scheme}://${node.fqdn}:${node.port}`;
+  /*
+   * A node published through a Cloudflare tunnel answers on the default port for its scheme, and the
+   * hostname is what carries the identity (`https://node1.example.com`). Appending `:443` still works —
+   * Cloudflare forwards it — but it makes every stored address, log line and support message look
+   * wrong, and a copied `https://node1.example.com:443` is not what an operator typed into Cloudflare.
+   */
+  const defaultPort = scheme === "https" ? 443 : 80;
+  return node.port === defaultPort ? `${scheme}://${node.fqdn}` : `${scheme}://${node.fqdn}:${node.port}`;
 }
 
 export function getNode(nodeId: number): NodeRow | null {

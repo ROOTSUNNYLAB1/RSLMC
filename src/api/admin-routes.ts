@@ -356,17 +356,47 @@ export function registerAdminRoutes(api: Router): void {
     );
   });
 
+  /**
+   * Edit a node — including its address.
+   *
+   * The address fields were missing here and that made a whole class of problems unfixable from the
+   * UI: a node moved to a new IP, or a node now published through a Cloudflare tunnel whose hostname
+   * changed, had no editable address at all. Only the tunnel shortcut ("use as this node's address")
+   * could set one. Validated here for the same reason as at creation, and the self-loop guard runs on
+   * the *resulting* address so an edit cannot turn this panel into a node of itself.
+   */
   api.patch("/api/nodes/:id", async (ctx) => {
     requirePermission(ctx.user, "node.manage");
-    const body = await ctx.body<{ name?: string; description?: string; maintenance?: boolean; public?: boolean; location?: string }>();
+    const body = await ctx.body<{
+      name?: string; description?: string; maintenance?: boolean; public?: boolean; location?: string;
+      fqdn?: string; scheme?: string; port?: number;
+    }>();
     const node = queryOne<any>("SELECT * FROM nodes WHERE id = ?", [Number(ctx.params.id)]);
     if (!node) throw notFound("Node not found");
-    run("UPDATE nodes SET name = ?, description = ?, maintenance = ?, public = ?, location = ? WHERE id = ?", [
+
+    const fqdn = (body.fqdn ?? node.fqdn).trim().toLowerCase();
+    const scheme = body.scheme ?? node.scheme;
+    const port = body.port ?? node.port;
+    if (body.fqdn !== undefined || body.scheme !== undefined || body.port !== undefined) {
+      if (node.is_local === 1) throw badRequest("The local node's address is this panel — it cannot be edited.");
+      if (!/^[a-z0-9.-]+$/.test(fqdn)) throw badRequest(`"${fqdn}" is not a valid hostname or IP address.`);
+      if (scheme !== "http" && scheme !== "https") throw badRequest("The scheme must be http or https.");
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest("The port must be between 1 and 65535.");
+      assertNoSelfLoop({ ...node, fqdn, scheme, port } as any, PORT);
+    }
+
+    run("UPDATE nodes SET name = ?, description = ?, maintenance = ?, public = ?, location = ?, fqdn = ?, scheme = ?, port = ?, last_status = NULL, last_error = NULL WHERE id = ?", [
       body.name ?? node.name, body.description ?? node.description,
       (body.maintenance ?? node.maintenance === 1) ? 1 : 0,
       (body.public ?? node.public === 1) ? 1 : 0,
-      body.location ?? node.location, node.id,
+      body.location ?? node.location,
+      fqdn, scheme, port, node.id,
     ]);
+    recordAudit({
+      actorId: ctx.user!.id, actorName: ctx.user!.username, action: "node.updated", ip: ctx.clientIp,
+      targetType: "node", targetId: node.id,
+      metadata: body.fqdn !== undefined || body.port !== undefined ? { address: `${scheme}://${fqdn}:${port}` } : undefined,
+    });
     return json({ ok: true });
   });
 

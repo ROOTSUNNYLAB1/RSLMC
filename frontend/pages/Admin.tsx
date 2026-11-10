@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Activity, Cpu, Download, Gauge, Globe2, HardDrive, KeyRound, Plus, RefreshCw, ScrollText, Server, ShieldCheck, Trash2, Users2, MemoryStick, Terminal, Info, UserPlus, UserCheck, Save, CircleAlert } from "lucide-react";
+import { Activity, Cloud, Cpu, Download, Gauge, Globe2, HardDrive, KeyRound, Plus, RefreshCw, ScrollText, Server, ShieldCheck, Trash2, Users2, MemoryStick, Terminal, Info, UserPlus, UserCheck, Save, CircleAlert } from "lucide-react";
 import { Avatar, Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, ProgressBar, Select, StatCard, Toggle, InfoList, CopyValue } from "../components/ui";
 import { api } from "../lib/api";
 import { roleHasAdminAccess } from "../../src/shared/permissions";
 import { useSession, useToast } from "../lib/app";
+import { TunnelDialog } from "../components/tunnel-dialog";
 import { Link, useRouter } from "../lib/router";
 import { formatBytes, formatDateTime, formatDuration, relativeTime } from "../lib/format";
 /* ------------------------------- Sub-navigation -------------------------- */
@@ -135,6 +136,9 @@ export function NodesPage() {
   const [selfKey, setSelfKey] = useState("");
   const [selfUrl, setSelfUrl] = useState("");
   const [deleteNode, setDeleteNode] = useState<any | null>(null);
+  const [tunnelNode, setTunnelNode] = useState<any | null>(null);
+  const [addressNode, setAddressNode] = useState<any | null>(null);
+  const [addressForm, setAddressForm] = useState({ scheme: "https", fqdn: "", port: "443" });
 
   const load = () =>
     Promise.all([
@@ -193,9 +197,29 @@ export function NodesPage() {
                   <Pill tone={node.online ? "green" : node.lastStatus === "offline" ? "red" : "neutral"} dot>
                     {node.online ? "online" : node.lastStatus === "offline" ? "offline" : "not checked yet"}
                   </Pill>
+                  {node.tunnel?.configured ? (
+                    <Pill
+                      tone={node.tunnel.status === "running" ? "green" : node.tunnel.status === "failed" ? "red" : node.tunnel.status === "starting" ? "amber" : "neutral"}
+                      dot
+                    >
+                      tunnel {node.tunnel.status}{node.tunnel.mode === "quick" ? " · temporary" : ""}
+                    </Pill>
+                  ) : null}
+                  {can("node.view") ? (
+                    <Button size="sm" icon={<Cloud size={12} />} onClick={() => setTunnelNode(node)}>
+                      Tunnel
+                    </Button>
+                  ) : null}
                   {!node.isLocal && can("node.manage") ? (
                     <>
                       <Button size="sm" icon={<RefreshCw size={12} />} loading={testingId === node.id} onClick={() => void testConnection(node)}>Test</Button>
+                      <Button
+                        size="sm"
+                        icon={<Globe2 size={12} />}
+                        onClick={() => { setAddressNode(node); setAddressForm({ scheme: node.scheme, fqdn: node.fqdn, port: String(node.port) }); }}
+                      >
+                        Address
+                      </Button>
                       <Button size="sm" icon={<KeyRound size={12} />} onClick={() => { setKeyNode(node); setKeyValue(""); }}>Key</Button>
                       <Button size="sm" variant="danger" icon={<Trash2 size={12} />} onClick={() => setDeleteNode(node)}>Delete</Button>
                     </>
@@ -206,6 +230,12 @@ export function NodesPage() {
               <div className="grid grid-3" style={{ gap: 14 }}>
                 <div className="info-list" style={{ margin: -14 }}>
                   <div className="info-row"><span className="k">Address</span><span className="v mono text-xs">{node.scheme}://{node.fqdn}:{node.port}</span></div>
+                  {node.tunnel?.hostname ? (
+                    <div className="info-row">
+                      <span className="k">Tunnel</span>
+                      <span className="v"><CopyValue value={`https://${node.tunnel.hostname}`} title="Copy the tunnel URL" /></span>
+                    </div>
+                  ) : null}
                   <div className="info-row"><span className="k">Location</span><span className="v">{node.location ?? "—"}</span></div>
                   <div className="info-row"><span className="k">Servers</span><span className="v">{node.serverCount}{node.linkedServers ? ` (${node.linkedServers} this panel)` : ""}</span></div>
                   <div className="info-row"><span className="k">Version</span><span className="v">{node.daemonVersion ? `RSLMC ${node.daemonVersion}` : node.isLocal ? "this panel" : "unknown"}</span></div>
@@ -462,6 +492,65 @@ export function NodesPage() {
           } catch (error) { toast.fromError(error, "Could not remove the node"); }
         }}
       />
+
+      <Modal
+        open={Boolean(addressNode)}
+        onClose={() => setAddressNode(null)}
+        title={addressNode ? `Address of ${addressNode.name}` : "Node address"}
+        icon={<Globe2 size={14} />}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAddressNode(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              icon={<Save size={13} />}
+              onClick={async () => {
+                try {
+                  await api.patch(`/api/nodes/${addressNode.id}`, {
+                    scheme: addressForm.scheme,
+                    fqdn: addressForm.fqdn.trim(),
+                    port: Number(addressForm.port),
+                  });
+                  toast.success("Address saved", "Press Test to confirm the node answers there.");
+                  setAddressNode(null);
+                  await load();
+                } catch (error) { toast.fromError(error, "Could not save the address"); }
+              }}
+            >
+              Save
+            </Button>
+          </>
+        }
+      >
+        <div className="stack">
+          <p className="text-sm faint" style={{ margin: 0, lineHeight: 1.6 }}>
+            Where this controller reaches the node. For a node behind a Cloudflare Tunnel this is the tunnel's
+            hostname with <span className="mono">https</span> and port <span className="mono">443</span> — or use the
+            Tunnel dialog's "use as this node's address" once the tunnel is running.
+          </p>
+          <div className="form-grid">
+            <Field label="Scheme">
+              <Select value={addressForm.scheme} onChange={(event) => setAddressForm({ ...addressForm, scheme: event.target.value })}>
+                <option value="https">https</option>
+                <option value="http">http</option>
+              </Select>
+            </Field>
+            <Field label="Port"><Input type="number" min={1} max={65535} value={addressForm.port} onChange={(event) => setAddressForm({ ...addressForm, port: event.target.value })} /></Field>
+          </div>
+          <Field label="Hostname or IP" hint="A tunnel hostname (node1.example.com) or the machine's address (10.0.0.4).">
+            <Input value={addressForm.fqdn} onChange={(event) => setAddressForm({ ...addressForm, fqdn: event.target.value })} />
+          </Field>
+        </div>
+      </Modal>
+
+      {tunnelNode ? (
+        <TunnelDialog
+          node={{ id: tunnelNode.id, name: tunnelNode.name, isLocal: tunnelNode.isLocal, port: tunnelNode.port }}
+          open
+          onClose={() => setTunnelNode(null)}
+          onChanged={() => void load()}
+        />
+      ) : null}
     </>
   );
 }

@@ -6,6 +6,7 @@ import { handleApiRequest, describeRoutes } from "./api";
 import { loadDockerConfig } from "./api/panel-routes";
 import { upgradeWebSocket, websocketHandlers, startWsHeartbeat, wsStats } from "./api/ws";
 import { startScheduler, stopScheduler } from "./services/schedules";
+import { resumeEnabledTunnels, stopAllTunnels } from "./tunnels/manager";
 import { adoptRelays, handOffForPanelRestart, reconcileContainers, reconcileForeignProcesses, runningServerCount, shutdownAll, waitForIdle } from "./processes/manager";
 import { probeDocker } from "./runtime/docker";
 import { completeRestartOnBoot, registerRestartHandlers } from "./update/restart";
@@ -81,6 +82,19 @@ async function main(): Promise<void> {
     if (relays.failed > 0) console.warn(`[rslmc] ${relays.failed} relay(s) could not be reattached — see the server console`);
   } catch (error) {
     console.error(`[rslmc] relay adoption failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  /*
+   * Cloudflare tunnels are the only route to a node that has no open inbound port, so one that was
+   * running when the panel went down is started again here. Each result is logged with the node's own
+   * error text; a tunnel that cannot start never blocks the panel from booting.
+   */
+  try {
+    const tunnels = resumeEnabledTunnels();
+    if (tunnels.started > 0) console.log(`[rslmc] resumed ${tunnels.started} Cloudflare tunnel(s)`);
+    if (tunnels.failed > 0) console.warn(`[rslmc] ${tunnels.failed} Cloudflare tunnel(s) could not be resumed — see Admin → Nodes`);
+  } catch (error) {
+    console.error(`[rslmc] tunnel resume failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   // A server started before a panel restart has no entry in the process table; adopt it so the UI
@@ -296,7 +310,12 @@ const server = Bun.serve({
    * they never notice the panel was gone.
    */
   registerRestartHandlers({
-    handOff: () => handOffForPanelRestart(),
+    handOff: () => {
+      // Tunnels are re-started by the new process from the database (enabled=1), so they are stopped
+      // here rather than left as orphans of a dead parent.
+      stopAllTunnels();
+      return handOffForPanelRestart();
+    },
     async shutdown() {
       stopUpdateWatcher();
       stopScheduler();
@@ -361,6 +380,7 @@ const server = Bun.serve({
     stopScheduler();
     stopUpdateWatcher();
     stopNodeHeartbeats();
+    stopAllTunnels();
     shutdownAll();
     // Give running servers the chance to stop gracefully before the panel exits (bounded).
     await waitForIdle(9000);

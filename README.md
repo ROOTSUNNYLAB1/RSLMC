@@ -1209,12 +1209,51 @@ Honest limits: the key exchange is manual, a node treats an accepted controller 
 administrator (so treat the key like a root password), and there is no file copy between panels —
 files live on the machine that runs the server.
 
+### A node with no public address: Cloudflare Tunnel
+
+Most home connections cannot accept an inbound connection at all — CGNAT, a blocked port 80/443, or an
+operator who simply will not forward one. A node like that is unreachable however correct its key is.
+**Administration → Nodes → Tunnel** fixes it without opening anything: `cloudflared` runs *on the node*,
+dials out to Cloudflare, and Cloudflare serves a hostname that forwards back down that connection.
+
+![Nodes with a Cloudflare tunnel](docs/screenshots/nodes-with-tunnel.png)
+
+* **Your own domain (token mode)** — create the tunnel in Cloudflare Zero Trust (Networks → Tunnels),
+  point a public hostname at `http://127.0.0.1:<panel port>`, paste the token. The panel runs
+  `cloudflared tunnel run --token …` with `--no-autoupdate`, so a tunnel that is up stays up until you say
+  otherwise. The hostname is yours and it is stable.
+* **Temporary hostname (quick mode)** — no account, no DNS. Cloudflare assigns
+  `<random>.trycloudflare.com`, read out of `cloudflared`'s own log. Useful for proving the path works
+  before touching DNS, and honest about what it is: **the name changes on every start** and Cloudflare
+  rate-limits it. The UI says both, in the dialog and when you later point a node at that address.
+* **"Use as this node's address"** — one click sets the controller's copy of that node to
+  `https://<tunnel hostname>` on port 443. No retyping, no `:443` in the address string.
+* **Reachability is measured, not assumed.** `cloudflared` saying "Registered tunnel connection" only
+  proves the daemon is talking to Cloudflare. *Check reachability* asks the public URL for
+  `/api/agent/ping` and reports the real status, latency, and what a bad answer means.
+* **Honest failures, in Cloudflare's words.** A wrong token is not reported as "tunnel failed": the
+  panel keeps `cloudflared`'s own last lines (`Provided Tunnel token is not valid.`) and shows them.
+  Three automatic restarts follow an unexpected exit, then it stops trying and keeps the reason.
+* **The token is stored sealed, never returned.** AES-256-GCM with a key derived from the panel secret
+  (`<data>/secrets/panel.key`, 0600 — never in the database), so a copied `rslmc.db` contains no usable
+  credential. Endpoints return `hasToken` and a short fingerprint; the dialog never shows the token
+  again. See `SECURITY.md` §1k.
+* **Back up on boot.** A tunnel that was running when the panel stopped is restarted at the next boot,
+  because for such a node it is the only way to be reached at all.
+* **Last known state survives.** The controller caches the hostname a node reports, so when the address
+  stops working you can still see — and reuse — the last one it gave, labelled with when it was seen.
+
+What a tunnel does **not** do: it does not make the panel faster (every request goes out to Cloudflare
+and back), Cloudflare's free plan caps a single upload at 100 MB and a request at 100 s (a multi-gigabyte
+backup will fail through it — use the LAN address), and Cloudflare terminates TLS in front of the node,
+so it can see that traffic. All three are printed in the dialog, not buried here.
+
 ---
 
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (42 files, 474 tests)
+bun run test                          # every suite, one process per file (43 files, 488 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)
