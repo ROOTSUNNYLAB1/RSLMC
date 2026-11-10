@@ -411,6 +411,31 @@ fingerprinting, hostname normalisation and refusal, quick-hostname parsing, log 
 construction (including the no-token refusal), the platform→asset mapping, and the default-port rule for
 node addresses.
 
+
+## 1l. Choosing a runtime the CPU can execute (2026.11.04.22)
+
+Not a vulnerability, but a trust problem in the same family: the installer unpacks a binary from the
+network and runs it **as root**, so "it downloaded and installed" must never be treated as "it works".
+
+* **Capability first, download second.** `install.sh` reads the CPU's `avx2` flag (`/proc/cpuinfo` on
+  Linux, `sysctl` on macOS) and picks Bun's `-baseline` build when it is missing, instead of installing
+  a build that will trap with SIGILL. `--runtime-plan` prints that decision and changes nothing.
+* **Verify by executing.** The downloaded Bun must answer `--version` before it is copied into place;
+  if the default build installs but crashes, the baseline build is fetched and verified, and if neither
+  runs the installer stops and names the CPU rather than leaving a broken install behind.
+* **The runtime is re-checked as the service user** before `bun install` runs, because a root-only path
+  or a PATH shadowing a different `bun` is its own failure. A trap is reported as a trap, with the fix,
+  instead of as "Installing dependencies failed".
+* **Checksums are still enforced** for both builds (Bun publishes `SHASUMS256.txt`), and the opt-out for
+  an air-gapped mirror is unchanged and still prints a warning.
+* **The panel reports it too.** `GET /api/system` includes a `cpu` block (AVX2 present, recommended Bun
+  build, and a one-line explanation), so support starts from facts rather than a request for `lscpu`.
+
+**Tests.** `tests/cpu-runtime.test.ts` (4) asserts the report agrees with `/proc/cpuinfo`, that the
+recommendation follows from the flag rather than from hope, and that every report carries an actionable
+note; `scripts/installer-smoke.sh` gains three cases covering both CPU states and a crashing `bun` on
+PATH.
+
 ## 2. What the harness proves is already right
 
 | Area | Checks | Detail |

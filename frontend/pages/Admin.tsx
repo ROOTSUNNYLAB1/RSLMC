@@ -1590,10 +1590,31 @@ export function SystemPage() {
                 ),
               },
               { key: "Bun", value: data.panel.bunVersion },
+              {
+                key: "CPU build",
+                value: data.cpu ? (
+                  <span className="row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <Pill tone={data.cpu.recommendedBunBuild === "baseline" ? "amber" : data.cpu.recommendedBunBuild === "default" ? "green" : "neutral"}>
+                      {data.cpu.recommendedBunBuild === "baseline" ? "baseline Bun required" : data.cpu.recommendedBunBuild === "default" ? "default Bun" : `no AVX2 split (${data.cpu.arch})`}
+                    </Pill>
+                    <span className="text-xs faint" title={data.cpu.note}>{data.cpu.avx2 === null ? "AVX2 unknown" : data.cpu.avx2 ? "AVX2 present" : "no AVX2"}</span>
+                  </span>
+                ) : "unknown",
+              },
               { key: "Managed processes", value: data.managedProcesses.length },
             ]}
           />
         </Card>
+
+        {data.cpu && data.cpu.recommendedBunBuild === "baseline" ? (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <Banner tone="warning" title="This CPU needs Bun's baseline build">
+              {data.cpu.note}
+              {data.cpu.model ? ` (${data.cpu.model})` : ""} If you installed Bun yourself and the panel or
+              <span className="mono"> bun install </span> dies with "Illegal instruction", that is this — not a broken release.
+            </Banner>
+          </div>
+        ) : null}
 
         <Card title="Host" icon={<Cpu size={12} />} bodyClass="tight">
           <InfoList

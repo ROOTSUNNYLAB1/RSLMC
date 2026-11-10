@@ -13,6 +13,7 @@ import { listManaged } from "../processes/manager";
 import { PERMISSIONS, ALL_PERMISSIONS } from "../shared/permissions";
 import { backupDatabase, getSetting } from "../database";
 import { APP_VERSION, MODE, PORT, PATHS, DATA_LOCATION } from "../shared/config";
+import { cpuCapabilities } from "../runtime/cpu";
 import { backupStorageSummary } from "../services/backups";
 import { pruneOldMetrics } from "../database";
 import { recordAudit } from "../services/audit";
@@ -161,6 +162,11 @@ export function registerAdminRoutes(api: Router): void {
         dataDir: PATHS.data, dataDirSource: DATA_LOCATION.source, dataDirNote: DATA_LOCATION.note,
       },
       host: hostStats(),
+      /*
+       * Which Bun build this machine needs. An operator whose install died with `trap invalid opcode`
+       * finds the cause here in one line, instead of in a log they have already scrolled past.
+       */
+      cpu: cpuCapabilities(),
       enforcement: describeEnforcement(cgroups),
       cgroups,
       managedProcesses: listManaged(),

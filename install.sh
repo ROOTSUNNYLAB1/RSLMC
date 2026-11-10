@@ -159,6 +159,7 @@ Other flags:
   --uninstall        stop and remove the panel (data kept)
   --purge            with --uninstall: also delete the data folder
   --dry-run          print the plan and exit
+  --runtime-plan     print what Bun build this CPU needs, then exit (no changes)
   --no-color         plain output
   --help
 
@@ -189,6 +190,7 @@ while [[ $# -gt 0 ]]; do
     --uninstall)  OPT_UNINSTALL=1; shift ;;
     --purge)      OPT_PURGE=1; shift ;;
     --dry-run)    OPT_DRYRUN=1; shift ;;
+    --runtime-plan) OPT_RUNTIME_PLAN=1; shift ;;
     --no-color)   RSLMC_OPT_NO_COLOR=1; C_RESET=""; C_DIM=""; C_BOLD=""; C_GREEN=""; C_DEEP=""; C_AMBER=""; C_RED=""; C_GREY=""; C_WHITE=""; shift ;;
     -h|--help)    usage ;;
     *) err "Unknown option: $1 (try --help)"; exit 2 ;;
@@ -354,6 +356,78 @@ detect_os() {
 }
 
 is_musl() { [[ -f /etc/alpine-release ]] || (ldd /bin/sh 2>/dev/null | grep -qi musl); }
+
+# The release asset for this machine. `baseline` exists only for x86_64 (aarch64 never needed it).
+bun_asset_name() {
+  local arch="$1" baseline="$2" asset os
+  # Detected here rather than read from the global: this helper is also used by --runtime-plan, which
+  # runs before the environment probe and must not depend on it.
+  case "$(uname -s)" in Darwin) os="darwin" ;; Linux) os="linux" ;; *) os="other" ;; esac
+  asset="bun-${os}-${arch}"
+  is_musl && asset="${asset}-musl"
+  if [[ "$baseline" == "1" && "$arch" == "x64" ]]; then asset="${asset}-baseline"; fi
+  printf '%s.zip' "$asset"
+}
+
+
+cpu_supports_avx2() {
+  # An explicit answer wins: for a VM whose /proc/cpuinfo hides the flag, and for the smoke test.
+  if [[ -n "${RSLMC_CPU_AVX2:-}" ]]; then [[ "$RSLMC_CPU_AVX2" == "1" ]]; return $?; fi
+  case "$(uname -s)" in
+    Linux)
+      [[ -r /proc/cpuinfo ]] || return 0   # no information: assume the modern build
+      grep -qw avx2 /proc/cpuinfo 2>/dev/null && return 0
+      return 1
+      ;;
+    Darwin)
+      sysctl -n machdep.cpu.leaf7_features 2>/dev/null | grep -qw AVX2 && return 0
+      sysctl -n hw.optional.avx2_0 2>/dev/null | grep -qx 1 && return 0
+      return 1
+      ;;
+    *) return 0 ;;
+  esac
+}
+
+# Does this binary actually run? A SIGILL is silent in `command -v`, so the version output is the test.
+bun_runs() {
+  local bin="$1" out
+  [[ -n "$bin" && -x "$bin" ]] || return 1
+  out="$("$bin" --version 2>/dev/null)" || return 1
+  [[ "$out" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+}
+
+# --runtime-plan: answer "what will this machine get?" without changing anything. Useful for support:
+# it prints the CPU, whether AVX2 is present, and the exact Bun asset the installer would fetch.
+if [[ "${OPT_RUNTIME_PLAN:-0}" -eq 1 ]]; then
+  case "$(uname -m)" in
+    x86_64|amd64) RP_ARCH="x64" ;;
+    aarch64|arm64) RP_ARCH="aarch64" ;;
+    *) RP_ARCH="unsupported" ;;
+  esac
+  printf '\n  RSLMC runtime plan\n\n'
+  printf '  %-22s %s\n' "OS" "$(uname -s) $(uname -r)"
+  printf '  %-22s %s\n' "Architecture" "$(uname -m)${RP_ARCH:+ → $RP_ARCH}"
+  if cpu_supports_avx2; then
+    printf '  %-22s %s\n' "AVX2" "yes"
+    printf '  %-22s %s\n' "Bun build" "$(bun_asset_name "$RP_ARCH" 0) (default)"
+  else
+    printf '  %-22s %s\n' "AVX2" "no"
+    printf '  %-22s %s\n' "Bun build" "$(bun_asset_name "$RP_ARCH" 1) (baseline — this CPU needs it)"
+  fi
+  if have bun; then
+    if bun_runs "$(command -v bun)"; then
+      printf '  %-22s %s\n' "Installed bun" "$(bun --version 2>/dev/null) at $(command -v bun) — runs here"
+    else
+      printf '  %-22s %s\n' "Installed bun" "$(command -v bun) — present but CRASHES on this CPU"
+    fi
+  else
+    printf '  %-22s %s\n' "Installed bun" "none"
+  fi
+  printf '\n'
+  exit 0
+fi
+
+
 
 have_systemd() {
   [[ "$OS" == "linux" ]] && have systemctl && [[ -d /run/systemd/system ]]
@@ -879,49 +953,45 @@ trap cleanup EXIT
 
 # ── 1. bun ──────────────────────────────────────────────────────────────────
 section "Runtime"
-BUN_BIN=""
-ensure_bun() {
-  local existing="" need_install=1
-  if have bun; then
-    existing="$(bun --version 2>/dev/null || true)"
-    if [[ -n "$existing" ]] && version_ge "$existing" "$MIN_BUN"; then
-      BUN_BIN="$(command -v bun)"
-      need_install=0
-    fi
-  fi
-  if [[ $need_install -eq 0 ]]; then
-    ok "Bun ${existing} already installed at ${BUN_BIN}"
-    return 0
-  fi
 
-  local arch asset url tmp code
-  case "$(uname -m)" in
-    x86_64|amd64) arch="x64" ;;
-    aarch64|arm64) arch="aarch64" ;;
-    *) err "Unsupported CPU architecture $(uname -m) for Bun."; return 1 ;;
-  esac
-  asset="bun-${OS}-${arch}"
-  is_musl && asset="${asset}-musl"
-  asset="${asset}.zip"
-
+# Does this CPU run Bun's default x86_64 build?
+#
+# Bun ships two x86_64 builds. The default one is compiled for AVX2; the `-baseline` one only needs
+# SSE4.2. On a CPU without AVX2 — older Xeons, Atom/Celeron parts, and virtual machines whose CPU
+# model hides the flag — the default build dies with SIGILL the moment it starts:
+#
+#     traps: bun[1480] trap invalid opcode ip:1a4323c
+#
+# That is what broke an install here: Bun installed fine, and then every `bun install` crashed, which
+# the installer could only report as "Installing dependencies failed". The fix is to choose the build
+# the CPU can actually run *before* installing it, and to verify by running it afterwards.
+# Downloads, verifies and unpacks one Bun build.
+#
+# The result is written to two files rather than printed: every message inside this function is meant
+# for the operator (progress, checksum lines), and returning a path on stdout would have mixed them all
+# into the value — which is how the first version of this ended up with a multi-line "binary path" that
+# could not be executed, and lost BUN_BUILD_NOTE to a subshell.
+fetch_bun_build() {
+  local arch="$1" baseline="$2" asset url tmp code want got bin_path sums_url
+  asset="$(bun_asset_name "$arch" "$baseline")"
   url="https://github.com/oven-sh/bun/releases/latest/download/${asset}"
+  printf '%s' "$asset" > "$WORK/.bun-asset"
   code="$(curl -sIL -o /dev/null -m 20 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
   if [[ "$code" != "200" && "$code" != "302" ]]; then
-    err "Bun has no ${asset} for this platform (HTTP $code). Install Bun yourself and re-run."
+    warn "Bun has no ${asset} for this platform (HTTP $code)."
     return 1
   fi
-  tmp="$WORK/bun"
+  tmp="$WORK/bun-${baseline}"
   mkdir -p "$tmp"
-  download "$url" "$tmp/bun.zip" "Bun runtime"
+  download "$url" "$tmp/bun.zip" "Bun runtime (${asset})"
 
   # Bun publishes SHASUMS256.txt next to each release. It is required: this archive is unpacked and
   # installed as root, so "the checksum file did not load, carry on" was a hole, and a file with no
   # line for our asset passed silently as well. An explicit opt-out exists for an air-gapped mirror.
-  local sums_url="${url%/*}/SHASUMS256.txt" want got
+  sums_url="${url%/*}/SHASUMS256.txt"
   if ! curl -fsSL --max-time 20 -o "$tmp/SHASUMS256.txt" "$sums_url" 2>/dev/null; then
     if [[ "${RSLMC_SKIP_BUN_CHECKSUM:-0}" == "1" ]]; then
       warn "RSLMC_SKIP_BUN_CHECKSUM=1 — installing Bun without a checksum (you asked for this)."
-      RSLMC_SKIP_BUN_CHECKSUM=1
     else
       err "The Bun checksum file could not be downloaded from ${sums_url}."
       say "Refusing to install an unverified runtime. Install Bun yourself (https://bun.sh) and re-run,"
@@ -930,10 +1000,10 @@ ensure_bun() {
     fi
   fi
   if [[ "${RSLMC_SKIP_BUN_CHECKSUM:-0}" != "1" ]]; then
-    want="$(awk -v a="$(basename "$url")" '$2==a || $2=="*"a {print $1}' "$tmp/SHASUMS256.txt" | head -n1)"
+    want="$(awk -v a="${asset}" '$2==a || $2=="*"a {print $1}' "$tmp/SHASUMS256.txt" | head -n1)"
     got="$(sha256_of "$tmp/bun.zip")"
     if [[ -z "$want" ]]; then
-      err "SHASUMS256.txt has no entry for $(basename "$url") — refusing to install an unverified runtime."
+      err "SHASUMS256.txt has no entry for ${asset} — refusing to install an unverified runtime."
       return 1
     fi
     if [[ "$want" != "$got" ]]; then
@@ -947,10 +1017,69 @@ ensure_bun() {
 
   ( cd "$tmp" && { have unzip && unzip -oq bun.zip || python3 -c "import zipfile,sys; zipfile.ZipFile('bun.zip').extractall('.')" || busybox unzip -o bun.zip; } ) >/dev/null 2>&1 \
     || { err "Could not unpack the Bun archive (install unzip and retry)."; return 1; }
-  local bin_path
   bin_path="$(find "$tmp" -type f -name bun -perm -u+x | head -n1)"
   [[ -z "$bin_path" ]] && bin_path="$(find "$tmp" -type f -name bun | head -n1)"
   [[ -z "$bin_path" ]] && { err "The Bun archive did not contain a bun binary."; return 1; }
+  printf '%s' "$bin_path" > "$WORK/.bun-bin"
+  return 0
+}
+
+BUN_BIN=""
+BUN_BUILD_NOTE=""
+ensure_bun() {
+  local existing="" need_install=1 arch baseline=0
+
+  case "$(uname -m)" in
+    x86_64|amd64) arch="x64" ;;
+    aarch64|arm64) arch="aarch64" ;;
+    *) err "Unsupported CPU architecture $(uname -m) for Bun."; return 1 ;;
+  esac
+  cpu_supports_avx2 || baseline=1
+  # An operator can force it (a CPU that reports AVX2 but still traps, or a conservative choice).
+  [[ "${RSLMC_BUN_BASELINE:-0}" == "1" ]] && baseline=1
+
+  if have bun; then
+    existing="$(bun --version 2>/dev/null || true)"
+    if [[ -n "$existing" ]] && version_ge "$existing" "$MIN_BUN"; then
+      BUN_BIN="$(command -v bun)"
+      need_install=0
+      ok "Bun ${existing} already installed at ${BUN_BIN}"
+    elif [[ -z "$existing" ]]; then
+      # Present but silent: almost always the AVX2 build on a CPU without AVX2. Say so here instead of
+      # letting the next step fail with a stack of "Illegal instruction" lines.
+      warn "The bun at $(command -v bun) exists but does not run on this CPU — replacing it."
+      [[ $baseline -eq 0 ]] && { baseline=1; info "This machine reports no AVX2; using Bun's baseline build." 2>/dev/null || true; }
+    fi
+  fi
+  if [[ $need_install -eq 0 ]]; then return 0; fi
+
+  # Try the build this CPU should run; if it installs but still traps, try the baseline one. The
+  # second attempt is what saves a machine whose /proc/cpuinfo claims AVX2 but whose hypervisor masks
+  # the instructions — the exact case where "the CPU looks fine" and every bun process dies.
+  local attempt bin_path use_baseline
+  for attempt in modern baseline; do
+    use_baseline=0
+    [[ "$attempt" == "baseline" ]] && use_baseline=1
+    if [[ "$attempt" == "modern" && $baseline -eq 1 ]]; then continue; fi
+    if [[ "$attempt" == "baseline" && $baseline -eq 0 && -z "${BUN_TRIED_MODERN:-}" ]]; then continue; fi
+    rm -f "$WORK/.bun-bin" "$WORK/.bun-asset"
+    fetch_bun_build "$arch" "$use_baseline" || continue
+    BUN_BUILD_NOTE="$(cat "$WORK/.bun-asset" 2>/dev/null || echo bun.zip)"
+    bin_path="$(cat "$WORK/.bun-bin" 2>/dev/null || echo "")"
+    if bun_runs "$bin_path"; then break; fi
+    err "The ${BUN_BUILD_NOTE} build installed, but it crashes on this CPU (illegal instruction)."
+    [[ $use_baseline -eq 0 ]] && { BUN_TRIED_MODERN=1; warn "Falling back to Bun's baseline build, which needs only SSE4.2."; }
+    bin_path=""
+  done
+  if [[ -z "${bin_path:-}" ]]; then
+    err "No Bun build runs on this CPU."
+    say "This machine's Bun builds all crashed with an illegal-instruction trap, which means the CPU is"
+    say "missing an instruction set they require (AVX2, and SSE4.2 for the baseline build)."
+    [[ -r /proc/cpuinfo ]] && say "CPU: $(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+    say "Install a Bun that matches this CPU from https://github.com/oven-sh/bun/releases and re-run;"
+    say "RSLMC itself does not need anything else."
+    return 1
+  fi
 
   local target
   if [[ $OPT_USER_MODE -eq 1 ]]; then
@@ -969,8 +1098,13 @@ ensure_bun() {
     ok "Bun installed to $target/bun"
   fi
   BUN_BIN="$(command -v bun || echo "${target}/bun")"
-  ok "Bun $("$BUN_BIN" --version 2>/dev/null || echo '?') ready"
+  if ! bun_runs "$BUN_BIN"; then
+    err "The Bun just installed does not run (${BUN_BIN} --version produced nothing)."
+    return 1
+  fi
+  ok "Bun $("$BUN_BIN" --version 2>/dev/null) ready ($(basename "${BUN_BUILD_NOTE:-bun}"))"
 }
+
 ensure_bun
 
 # A Bun installed for root (bun.sh puts it in /root/.bun/bin/bun) is invisible to the service
@@ -1134,6 +1268,18 @@ run mkdir -p "$BUN_CACHE"
 if [[ $OPT_USER_MODE -eq 0 && $CAN_ROOT -eq 1 ]]; then run chown -R "$RUN_USER":"$RUN_USER" "$BUN_CACHE" 2>/dev/null || true; fi
 
 section "Installing dependencies"
+# Prove the runtime the service user will actually get runs, before blaming a dependency install.
+# "Illegal instruction" from `bun install` is not a dependency problem: it is a Bun build this CPU
+# cannot execute (see the AVX2 note in the Runtime section), and the honest message has to say that.
+if ! as_service_user "$BUN_BIN" --version >>"$LOG_FILE" 2>&1; then
+  err "The Bun at ${BUN_BIN} does not run as ${RUN_USER} on this CPU."
+  printf '  %sLast lines of the output:%s\n' "$C_GREY" "$C_RESET"
+  tail -n 6 "$LOG_FILE" | sed 's/^/    /'
+  say "Run 'bash install.sh --runtime-plan' to see which Bun build this CPU needs."
+  say "A build that traps with 'Illegal instruction' means the CPU lacks AVX2 — re-run the installer,"
+  say "which now installs Bun's baseline build for such machines."
+  rollback
+fi
 if ! as_service_user "$BUN_BIN" install --production --frozen-lockfile >>"$LOG_FILE" 2>&1; then
   dim "the frozen lockfile install failed — retrying without --frozen-lockfile"
   if ! as_service_user "$BUN_BIN" install --production >>"$LOG_FILE" 2>&1; then
@@ -1141,8 +1287,15 @@ if ! as_service_user "$BUN_BIN" install --production --frozen-lockfile >>"$LOG_F
     printf '  %sLast lines of the output:%s\n' "$C_GREY" "$C_RESET"
     tail -n 20 "$LOG_FILE" | sed 's/^/    /'
     printf '\n'
-    say "The panel needs to write to ${INSTALL_PATH} as ${RUN_USER}."
-    say "If the message above says 'Permission denied', check: ls -ld ${INSTALL_PATH} ${BUN_BIN}"
+    # Name the cause when the output says what it is, instead of the one cause this used to assume.
+    if grep -qiE "illegal instruction|invalid opcode|trap invalid" "$LOG_FILE"; then
+      say "That is not a dependency problem: Bun itself crashed with an illegal-instruction trap."
+      say "This CPU is running a Bun build it cannot execute. Re-run the installer — it now installs"
+      say "Bun's baseline build (SSE4.2 only) automatically on such a machine."
+    else
+      say "The panel needs to write to ${INSTALL_PATH} as ${RUN_USER}."
+      say "If the message above says 'Permission denied', check: ls -ld ${INSTALL_PATH} ${BUN_BIN}"
+    fi
     rollback
   fi
 fi

@@ -1250,10 +1250,35 @@ so it can see that traffic. All three are printed in the dialog, not buried here
 
 ---
 
+### CPUs without AVX2 (the "Illegal instruction" install)
+
+Bun ships two x86_64 builds. The default one is compiled for **AVX2**; the `-baseline` one needs only
+SSE4.2. On an older Xeon, an Atom/Celeron part, or a VM whose CPU model hides the flag, the default build
+installs perfectly and then every `bun` process dies:
+
+```
+traps: bun[1480] trap invalid opcode ip:1a4323c
+  ✗ Installing dependencies failed.
+```
+
+That is not a dependency problem and not a broken release — the CPU cannot execute the binary. The
+installer now decides **before** installing anything (`install.sh --runtime-plan` prints the decision),
+picks `bun-linux-x64-baseline.zip` when AVX2 is missing, verifies the result by *running* `bun --version`,
+and falls back to the baseline build automatically if the first one installs but still traps. If no build
+runs at all, it says so with the CPU model instead of leaving you to guess.
+
+```
+bash install.sh --runtime-plan     #  AVX2: no → bun-linux-x64-baseline.zip (this CPU needs it)
+```
+
+The same information is on **Administration → System** (Runtime → *CPU build*), and the dependency step
+checks the runtime as the service user before it tries to use it — so "Illegal instruction" can never
+again be reported as "Installing dependencies failed".
+
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (43 files, 488 tests)
+bun run test                          # every suite, one process per file (44 files, 492 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

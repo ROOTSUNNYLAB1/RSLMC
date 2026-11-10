@@ -58,6 +58,40 @@ run_case "relative path is refused" 2 \
 # Help must always work — it is the one thing a broken install still owes the operator.
 run_case "--help" 0 --help
 
+# ── CPU capability → Bun build ────────────────────────────────────────────────
+# A Bun built for AVX2 on a CPU without it installs fine and then dies with SIGILL, which is how an
+# install once failed at "Installing dependencies" with nothing useful said. --runtime-plan must name
+# the baseline build for such a machine, and must not touch anything.
+plan_asset() {  # plan_asset <avx2 0|1>
+  RSLMC_CPU_AVX2="$1" bash "$INSTALLER" --runtime-plan 2>/dev/null | awk '/Bun build/ {print $3}'
+}
+check_plan() {  # check_plan <label> <avx2> <expected-asset>
+  local label="$1" avx2="$2" expected="$3" got
+  got="$(plan_asset "$avx2")"
+  if [[ "$got" == "$expected" ]]; then
+    printf '  ok    %s\n' "$label"
+  else
+    printf '  FAIL  %s (got "%s", expected "%s")\n' "$label" "$got" "$expected"
+    failures=$((failures + 1))
+  fi
+}
+check_plan "runtime plan picks the default build on an AVX2 CPU" 1 "bun-linux-x64.zip"
+check_plan "runtime plan picks the baseline build without AVX2" 0 "bun-linux-x64-baseline.zip"
+
+# A bun that exists but traps must be reported as such, not as "installed".
+if have_fake="$(mktemp -d)"; then
+  printf '#!/bin/sh\nkill -ILL $$\n' > "$have_fake/bun"
+  chmod +x "$have_fake/bun"
+  output="$(PATH="$have_fake:$PATH" bash "$INSTALLER" --runtime-plan 2>&1)"
+  if printf '%s' "$output" | grep -q "CRASHES on this CPU"; then
+    printf '  ok    runtime plan spots a bun binary that crashes\n'
+  else
+    printf '  FAIL  runtime plan did not flag a crashing bun\n'
+    failures=$((failures + 1))
+  fi
+  rm -rf "$have_fake"
+fi
+
 # Every function an option handler calls has to be defined before it can run. This is the exact
 # class of bug that shipped in v2026.11.02.1, so it gets its own check: any `name()` definition that
 # appears after its first call site is a failure.
