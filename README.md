@@ -1275,10 +1275,12 @@ The same information is on **Administration → System** (Runtime → *CPU build
 checks the runtime as the service user before it tries to use it — so "Illegal instruction" can never
 again be reported as "Installing dependencies failed".
 
+![Administration → System shows the CPU build](docs/screenshots/admin-system-cpu.png)
+
 ## Testing
 
 ```bash
-bun run test                          # every suite, one process per file (44 files, 492 tests)
+bun run test                          # every suite, one process per file (44 files, 494 tests)
 RSLMC_TEST_DOCKER=1 bun test tests/docker-live.test.ts   # real containers, needs a daemon
 bun run tests/security/pentest.ts     # 151 adversarial checks against a throwaway instance
 bash scripts/installer-smoke.sh       # runs install.sh --dry-run for every path shape (CI step)

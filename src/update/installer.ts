@@ -321,6 +321,23 @@ function restoreBackup(archivePath: string, targetRoot: string): void {
   extractTarGz(archivePath, targetRoot);
 }
 
+/**
+ * Turn a failed `bun install` into something an operator can act on.
+ *
+ * The one case that used to be mis-reported: `trap invalid opcode` / "Illegal instruction" means the
+ * Bun binary cannot run on this CPU (the default x86_64 build needs AVX2), and no amount of retrying or
+ * dependency fixing will change that. Everything else keeps the original output, because it is usually
+ * self-explanatory.
+ */
+export function explainInstallFailure(output: string): string | null {
+  if (/illegal instruction|invalid opcode|trap invalid/i.test(output)) {
+    return "Bun crashed with an illegal-instruction trap: this CPU is running a Bun build it cannot "
+      + "execute (the default x86_64 build needs AVX2). Re-run install.sh — it now chooses Bun's "
+      + "baseline build for such machines — or install that build yourself and restart the panel.";
+  }
+  return null;
+}
+
 async function runBunInstall(root: string, timeoutMs = 240_000): Promise<{ ok: boolean; output: string }> {
   if (!existsSync(join(root, "package.json"))) return { ok: true, output: "no package.json" };
   try {
@@ -573,7 +590,10 @@ async function runInstall(jobId: number, version: string, actor: string, targetR
       const install = await runBunInstall(targetRoot);
       if (!install.ok) {
         step(steps, "dependencies").status = "failed";
-        step(steps, "dependencies").detail = `bun install failed: ${install.output.split("\n").slice(-3).join(" ")} — restoring the previous build.`;
+        const explained = explainInstallFailure(install.output);
+        step(steps, "dependencies").detail = explained
+          ? `${explained} — restoring the previous build.`
+          : `bun install failed: ${install.output.split("\n").slice(-3).join(" ")} — restoring the previous build.`;
         saveSteps(jobId, steps, "dependencies");
         restoreBackup(backupPath, targetRoot);
         throw new Error("dependency installation failed; the previous build was restored");

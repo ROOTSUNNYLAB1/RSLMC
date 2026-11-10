@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { cpuCapabilities } from "../src/runtime/cpu";
+import { explainInstallFailure } from "../src/update/installer";
 
 /*
  * Which Bun build this CPU can run.
@@ -67,5 +68,29 @@ describe("the CPU capability report", () => {
     const report = cpuCapabilities();
     expect(report.note.length).toBeGreaterThan(20);
     expect(report.note.endsWith(".")).toBe(true);
+  });
+});
+
+describe("a failed dependency install is explained, not just reported", () => {
+  /*
+   * The update job prints a step result and the operator reads it. "bun install failed: traps: bun[1480]
+   * trap invalid opcode" is technically the output, and it sends people to look at their dependencies.
+   */
+  test("an illegal-instruction trap is named as a CPU/Bun mismatch", () => {
+    const realOutput = [
+      "Resolving dependencies",
+      "traps: bun[1480] trap invalid opcode ip:1a4323c sp:7ffdabb1f550 error:0",
+      "Illegal instruction",
+    ].join("\n");
+    const explained = explainInstallFailure(realOutput);
+    expect(explained).toContain("AVX2");
+    expect(explained).toContain("baseline");
+    expect(explained).toContain("install.sh");
+  });
+
+  test("an ordinary failure keeps its own message", () => {
+    // A network/registry problem must not be dressed up as a CPU problem.
+    expect(explainInstallFailure("error: GET https://registry.npmjs.org/ - connection refused")).toBeNull();
+    expect(explainInstallFailure("EACCES: permission denied, mkdir '/opt/rslmc/node_modules'")).toBeNull();
   });
 });
