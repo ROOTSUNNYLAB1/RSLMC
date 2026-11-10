@@ -3,6 +3,7 @@ import { Activity, Cloud, Cpu, Download, Gauge, Globe2, HardDrive, KeyRound, Plu
 import { Avatar, Banner, Button, Card, ConfirmDialog, EmptyState, Field, Input, Loading, Modal, PageHeader, Pill, ProgressBar, Select, StatCard, Toggle, InfoList, CopyValue } from "../components/ui";
 import { api } from "../lib/api";
 import { roleHasAdminAccess } from "../../src/shared/permissions";
+import { parseNodeAddress } from "../../src/nodes/address";
 import { useSession, useToast } from "../lib/app";
 import { TunnelDialog } from "../components/tunnel-dialog";
 import { Link, useRouter } from "../lib/router";
@@ -127,7 +128,7 @@ export function NodesPage() {
   const [nodes, setNodes] = useState<any[] | null>(null);
   const [self, setSelf] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", fqdn: "", scheme: "https", port: 8443, location: "" });
+  const [form, setForm] = useState({ name: "", description: "", address: "", location: "" });
   const [enrolled, setEnrolled] = useState<{ agentKey: string; reachable: boolean; probeError: string | null; node: any } | null>(null);
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
@@ -138,7 +139,7 @@ export function NodesPage() {
   const [deleteNode, setDeleteNode] = useState<any | null>(null);
   const [tunnelNode, setTunnelNode] = useState<any | null>(null);
   const [addressNode, setAddressNode] = useState<any | null>(null);
-  const [addressForm, setAddressForm] = useState({ scheme: "https", fqdn: "", port: "443" });
+  const [addressForm, setAddressForm] = useState({ address: "" });
 
   const load = () =>
     Promise.all([
@@ -216,7 +217,7 @@ export function NodesPage() {
                       <Button
                         size="sm"
                         icon={<Globe2 size={12} />}
-                        onClick={() => { setAddressNode(node); setAddressForm({ scheme: node.scheme, fqdn: node.fqdn, port: String(node.port) }); }}
+                        onClick={() => { setAddressNode(node); setAddressForm({ address: node.scheme === "https" && node.port === 443 ? node.fqdn : `${node.scheme}://${node.fqdn}:${node.port}` }); }}
                       >
                         Address
                       </Button>
@@ -374,10 +375,11 @@ export function NodesPage() {
 
           {localNode ? (
             <Banner tone="info" title="How a second machine is added">
-              1. On the other machine, install RSLMC and open its Nodes page. 2. Here, press <strong>New node</strong> and enter
-              that machine's address — the panel shows an agent key once. 3. Paste that key into the other panel's
-              <strong> This panel as a node</strong> card. 4. Press <strong>Test connection</strong>: the node reports its real
-              CPU, memory and disk from then on.
+              1. On the other machine, install RSLMC and open its Nodes page. 2. Here, press <strong>New node</strong> and type
+              that machine's domain — <span className="mono">node1.example.com</span> is enough; the panel shows an agent key
+              once. 3. Paste that key into the other panel's <strong>This panel as a node</strong> card. 4. Press
+              <strong> Test connection</strong>: the node reports its real CPU, memory and disk from then on. If the machine has
+              no public address, the node's <strong>Tunnel</strong> dialog is optional help — your own tunnel or proxy works too.
             </Banner>
           ) : null}
         </div>
@@ -397,8 +399,8 @@ export function NodesPage() {
                 setBusy(true);
                 try {
                   const result = await api.post<{ agentKey: string; reachable: boolean; probeError: string | null; node: any; message: string }>("/api/nodes", {
-                    name: form.name, description: form.description || undefined, fqdn: form.fqdn,
-                    scheme: form.scheme, port: Number(form.port), location: form.location || undefined,
+                    name: form.name, description: form.description || undefined,
+                    domain: form.address.trim(), location: form.location || undefined,
                   });
                   setEnrolled({ agentKey: result.agentKey, reachable: result.reachable, probeError: result.probeError, node: result.node });
                   await load();
@@ -430,10 +432,22 @@ export function NodesPage() {
           <div className="form-grid">
             <Field label="Name" required><Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="eu-frankfurt-1" /></Field>
             <Field label="Location"><Input value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="Frankfurt, DE" /></Field>
-            <Field label="Host / IP" required hint="The address this panel can reach the node on."><Input value={form.fqdn} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="node1.example.com" /></Field>
-            <Field label="Port" hint="The node panel's own port."><Input type="number" value={form.port} onChange={(event) => setForm({ ...form, port: Number(event.target.value) })} /></Field>
-            <Field label="Scheme"><Select value={form.scheme} onChange={(event) => setForm({ ...form, scheme: event.target.value })}><option value="https">https</option><option value="http">http</option></Select></Field>
+            <Field
+              label="Domain or address"
+              required
+              hint="The domain that points at the other machine — your tunnel's hostname, or its LAN address."
+            >
+              <Input
+                value={form.address}
+                onChange={(event) => setForm({ ...form, address: event.target.value })}
+                placeholder="node1.example.com"
+                autoFocus
+              />
+            </Field>
             <Field label="Description"><Input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></Field>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <AddressPreview value={form.address} />
+            </div>
           </div>
         )}
       </Modal>
@@ -506,11 +520,7 @@ export function NodesPage() {
               icon={<Save size={13} />}
               onClick={async () => {
                 try {
-                  await api.patch(`/api/nodes/${addressNode.id}`, {
-                    scheme: addressForm.scheme,
-                    fqdn: addressForm.fqdn.trim(),
-                    port: Number(addressForm.port),
-                  });
+                  await api.patch(`/api/nodes/${addressNode.id}`, { domain: addressForm.address.trim() });
                   toast.success("Address saved", "Press Test to confirm the node answers there.");
                   setAddressNode(null);
                   await load();
@@ -524,22 +534,15 @@ export function NodesPage() {
       >
         <div className="stack">
           <p className="text-sm faint" style={{ margin: 0, lineHeight: 1.6 }}>
-            Where this controller reaches the node. For a node behind a Cloudflare Tunnel this is the tunnel's
-            hostname with <span className="mono">https</span> and port <span className="mono">443</span> — or use the
-            Tunnel dialog's "use as this node's address" once the tunnel is running.
+            Where this controller reaches the node. Type the domain you pointed at it —{" "}
+            <span className="mono">node1.example.com</span> — and RSLMC fills in the rest. Add{" "}
+            <span className="mono">:port</span> or <span className="mono">http://</span> only when the node does not
+            answer on HTTPS 443.
           </p>
-          <div className="form-grid">
-            <Field label="Scheme">
-              <Select value={addressForm.scheme} onChange={(event) => setAddressForm({ ...addressForm, scheme: event.target.value })}>
-                <option value="https">https</option>
-                <option value="http">http</option>
-              </Select>
-            </Field>
-            <Field label="Port"><Input type="number" min={1} max={65535} value={addressForm.port} onChange={(event) => setAddressForm({ ...addressForm, port: event.target.value })} /></Field>
-          </div>
-          <Field label="Hostname or IP" hint="A tunnel hostname (node1.example.com) or the machine's address (10.0.0.4).">
-            <Input value={addressForm.fqdn} onChange={(event) => setAddressForm({ ...addressForm, fqdn: event.target.value })} />
+          <Field label="Domain or address" required>
+            <Input value={addressForm.address} onChange={(event) => setAddressForm({ address: event.target.value })} placeholder="node1.example.com" autoFocus />
           </Field>
+          <AddressPreview value={addressForm.address} />
         </div>
       </Modal>
 
@@ -552,6 +555,49 @@ export function NodesPage() {
         />
       ) : null}
     </>
+  );
+}
+
+
+/* --------------------------- Node address preview -------------------------- */
+
+/**
+ * Shows what the controller will actually call once the field is filled in.
+ * It runs the same parser the API uses, so a domain that looks fine here cannot
+ * be rejected later for a reason the operator never saw.
+ */
+function AddressPreview({ value }: { value: string }) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return (
+      <div className="text-xs faint" style={{ lineHeight: 1.6 }}>
+        Just the domain is enough — <span className="mono">node1.example.com</span> becomes{" "}
+        <span className="mono">https://node1.example.com:443</span>. Local machines use{" "}
+        <span className="mono">10.0.0.4:3986</span>.
+      </div>
+    );
+  }
+  const { parsed, error } = parseNodeAddress(trimmed);
+  if (!parsed) {
+    return (
+      <div className="text-xs" style={{ color: "var(--red)", lineHeight: 1.6 }}>
+        {error}
+      </div>
+    );
+  }
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <div className="text-xs">
+        <span className="faint">Requests go to </span>
+        <span className="mono">{parsed.scheme}://{parsed.fqdn}:{parsed.port}</span>
+      </div>
+      {parsed.note ? <div className="text-xs faint" style={{ lineHeight: 1.6 }}>{parsed.note}</div> : null}
+      <div className="text-xs faint" style={{ lineHeight: 1.6 }}>
+        {parsed.kind === "domain" && parsed.viaTls
+          ? "Checklist on the other machine: the panel listens on its own port, your tunnel or reverse proxy points the domain at it, and the node's own Nodes page holds this panel's key."
+          : "Make sure that machine's firewall lets this panel reach that port, then press Test connection after saving."}
+      </div>
+    </div>
   );
 }
 

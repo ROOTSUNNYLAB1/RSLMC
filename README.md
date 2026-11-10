@@ -1187,7 +1187,11 @@ One panel can drive several machines. The panel you use every day is the **contr
 machine runs its own RSLMC installation and becomes a **node**.
 
 1. Install RSLMC on the second machine exactly as usual and open its *Nodes* page.
-2. On the controller: **Administration → Nodes → New node**, enter that machine's address and port.
+2. On the controller: **Administration → Nodes → New node**, type that machine's **domain** — nothing
+   else. `node1.example.com` is read as `https://node1.example.com:443`; a LAN address such as
+   `10.0.0.4` is read as `http://10.0.0.4:3986`; a port or a scheme of your own
+   (`node1.example.com:8443`, `http://10.0.0.4:8080`) is honoured when you give one. The dialog shows
+   the exact URL it will call while you type, so what you see is what gets saved.
    The panel shows an **agent key** once. (If the address is already reachable, it also says hello
    immediately — but the node will refuse until step 3.)
 3. On the node: *Administration → Nodes → This panel as a node*, paste the key, **Save key**.
@@ -1210,6 +1214,11 @@ administrator (so treat the key like a root password), and there is no file copy
 files live on the machine that runs the server.
 
 ### A node with no public address: Cloudflare Tunnel
+
+Optional. If you already have a domain and a tunnel — Cloudflare, Tailscale Funnel, frp, nginx on a
+rented box, anything that terminates TLS in front of the node — you do not need this section at all:
+put the domain in **New node** and it works. The panel below manages Cloudflare's `cloudflared` for you
+when you have no such setup.
 
 Most home connections cannot accept an inbound connection at all — CGNAT, a blocked port 80/443, or an
 operator who simply will not forward one. A node like that is unreachable however correct its key is.

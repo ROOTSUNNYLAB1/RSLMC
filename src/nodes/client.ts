@@ -52,7 +52,9 @@ export function nodeBaseUrl(node: Pick<NodeRow, "scheme" | "fqdn" | "port">): st
    * wrong, and a copied `https://node1.example.com:443` is not what an operator typed into Cloudflare.
    */
   const defaultPort = scheme === "https" ? 443 : 80;
-  return node.port === defaultPort ? `${scheme}://${node.fqdn}` : `${scheme}://${node.fqdn}:${node.port}`;
+  // An IPv6 literal must be bracketed or the URL is unparsable ("http://fd00::1:3986").
+  const host = node.fqdn.includes(":") && !node.fqdn.startsWith("[") ? `[${node.fqdn}]` : node.fqdn;
+  return node.port === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${node.port}`;
 }
 
 export function getNode(nodeId: number): NodeRow | null {

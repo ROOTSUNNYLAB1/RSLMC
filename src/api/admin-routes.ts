@@ -18,6 +18,7 @@ import { backupStorageSummary } from "../services/backups";
 import { pruneOldMetrics } from "../database";
 import { recordAudit } from "../services/audit";
 import { publicNode, assertNoSelfLoop } from "./node-routes";
+import { parseNodeAddress } from "../nodes/address";
 import { assertNodeHostAllowed } from "../nodes/address";
 import { getNode, probeNode } from "../nodes/client";
 import { generateAgentKey } from "../nodes/agent";
@@ -297,35 +298,63 @@ export function registerAdminRoutes(api: Router): void {
     return json({ data: nodes.map((node) => publicNode(node)) });
   });
 
+  /**
+   * Register a second machine.
+   *
+   * `domain` is the field the operator actually has: a hostname served by their own tunnel or DNS
+   * (`node1.example.com`), or a LAN address (`10.0.0.4:3986`). Scheme and port are derived from it —
+   * a domain is HTTPS on 443, an IP is HTTP on the panel's port — because asking for three fields is
+   * how you end up with `https` pointing at port 3986 and an "unreachable node" nobody can explain.
+   * The explicit `fqdn`/`scheme`/`port` trio is still accepted for scripts that already send it.
+   */
   api.post("/api/nodes", async (ctx) => {
     requirePermission(ctx.user, "node.manage");
-    const body = await ctx.body();
+    const body = await ctx.body<Record<string, unknown>>();
+    const addressRaw = typeof body.domain === "string" ? body.domain
+      : typeof body.address === "string" ? body.address
+      : null;
+    let scheme = typeof body.scheme === "string" ? body.scheme : null;
+    let fqdn = typeof body.fqdn === "string" ? body.fqdn.trim() : null;
+    let port = typeof body.port === "number" ? body.port : null;
+    let addressNote: string | null = null;
+
+    if (addressRaw !== null) {
+      const { parsed, error } = parseNodeAddress(addressRaw);
+      if (error || !parsed) throw badRequest(error ?? "That address could not be read.");
+      // An explicit scheme/port in the same request still wins, so the API stays scriptable.
+      scheme = scheme ?? parsed.scheme;
+      fqdn = fqdn ?? parsed.fqdn;
+      port = port ?? parsed.port;
+      addressNote = parsed.note;
+    }
+
     const input = validate(
       {
         name: v.string({ min: 2, max: 60, pattern: /^[A-Za-z0-9 _.-]+$/ }),
         description: v.string({ max: 300, optional: true }),
-        fqdn: v.string({ min: 3, max: 253 }),
-        scheme: v.oneOf(["http", "https"] as const),
-        port: v.number({ integer: true, min: 1, max: 65535 }),
         location: v.string({ max: 120, optional: true }),
         public: v.boolean({ optional: true }),
       },
       body,
     );
+    if (!fqdn || !scheme || port === null) {
+      throw badRequest("A node needs a domain or address, e.g. node1.example.com — or fqdn, scheme and port.");
+    }
+    if (scheme !== "http" && scheme !== "https") throw badRequest("The scheme must be http or https.");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest("The port must be between 1 and 65535.");
+    const address = { fqdn, scheme: scheme as "http" | "https", port };
+
     const exists = queryOne("SELECT id FROM nodes WHERE name = ?", [input.name]);
     if (exists) throw badRequest("A node with that name already exists");
     // A node that points at this very panel would forward requests into a loop.
-    assertNoSelfLoop(
-      { scheme: input.scheme!, fqdn: input.fqdn!, port: input.port! } as any,
-      PORT,
-    );
+    assertNoSelfLoop(address as any, PORT);
     /*
      * The address is fetched again every 15 s for as long as the node exists, so it is validated once
      * here: no loopback, no cloud metadata endpoints (169.254.169.254, 100.100.100.200, fd00:ec2::254)
      * — and, for a hostname, no *resolved* address in those ranges either. A LAN address is fine; that
      * is the normal multi-node setup.
      */
-    await assertNodeHostAllowed(input.fqdn!);
+    await assertNodeHostAllowed(address.fqdn);
 
     /*
      * The agent key is generated here and shown exactly once. It is stored on the controller (it has
@@ -337,11 +366,14 @@ export function registerAdminRoutes(api: Router): void {
       `INSERT INTO nodes (uuid, name, description, fqdn, scheme, port, location, public, agent_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        randomUUID(), input.name, input.description ?? null, input.fqdn, input.scheme,
-        input.port, input.location ?? null, input.public === false ? 0 : 1, agentKey,
+        randomUUID(), input.name, input.description ?? null, address.fqdn, address.scheme,
+        address.port, input.location ?? null, input.public === false ? 0 : 1, agentKey,
       ],
     );
-    recordAudit({ actorId: ctx.user!.id, actorName: ctx.user!.username, action: "node.created", ip: ctx.clientIp, targetType: "node", targetId: id });
+    recordAudit({
+      actorId: ctx.user!.id, actorName: ctx.user!.username, action: "node.created", ip: ctx.clientIp,
+      targetType: "node", targetId: id, metadata: { address: `${address.scheme}://${address.fqdn}:${address.port}` },
+    });
 
     // Say hello straight away so the page can tell the operator whether the address is reachable.
     const node = getNode(id)!;
@@ -354,9 +386,13 @@ export function registerAdminRoutes(api: Router): void {
         node: publicNode(refreshed),
         reachable: probe.ok,
         probeError: probe.error,
+        address: { scheme: address.scheme, fqdn: address.fqdn, port: address.port, note: addressNote },
         message: probe.ok
           ? "Node registered and reachable. Paste the agent key into that panel to finish enrolling it."
-          : "Node registered. It is not answering yet — finish enrolling it on that machine, then press Test connection.",
+          : `Node registered at ${address.scheme}://${address.fqdn}:${address.port}, but it is not answering yet. `
+            + (address.scheme === "https" && address.port === 443
+              ? "If your domain points at a tunnel, check that the tunnel is running and that it forwards to this panel's port."
+              : "Finish enrolling it on that machine, then press Test connection."),
       },
       { status: 201 },
     );
@@ -375,15 +411,22 @@ export function registerAdminRoutes(api: Router): void {
     requirePermission(ctx.user, "node.manage");
     const body = await ctx.body<{
       name?: string; description?: string; maintenance?: boolean; public?: boolean; location?: string;
-      fqdn?: string; scheme?: string; port?: number;
+      fqdn?: string; scheme?: string; port?: number; domain?: string; address?: string;
     }>();
+    let parsedDomain: { fqdn: string; scheme: "http" | "https"; port: number; note: string | null } | null = null;
+    const domainInput = body.domain ?? body.address;
+    if (typeof domainInput === "string") {
+      const { parsed, error } = parseNodeAddress(domainInput);
+      if (error || !parsed) throw badRequest(error ?? "That address could not be read.");
+      parsedDomain = { fqdn: parsed.fqdn, scheme: parsed.scheme, port: parsed.port, note: parsed.note };
+    }
     const node = queryOne<any>("SELECT * FROM nodes WHERE id = ?", [Number(ctx.params.id)]);
     if (!node) throw notFound("Node not found");
 
-    const fqdn = (body.fqdn ?? node.fqdn).trim().toLowerCase();
-    const scheme = body.scheme ?? node.scheme;
-    const port = body.port ?? node.port;
-    if (body.fqdn !== undefined || body.scheme !== undefined || body.port !== undefined) {
+    const fqdn = (parsedDomain?.fqdn ?? body.fqdn ?? node.fqdn).trim().toLowerCase();
+    const scheme = parsedDomain?.scheme ?? body.scheme ?? node.scheme;
+    const port = parsedDomain?.port ?? body.port ?? node.port;
+    if (parsedDomain || body.fqdn !== undefined || body.scheme !== undefined || body.port !== undefined) {
       if (node.is_local === 1) throw badRequest("The local node's address is this panel — it cannot be edited.");
       if (!/^[a-z0-9.-]+$/.test(fqdn)) throw badRequest(`"${fqdn}" is not a valid hostname or IP address.`);
       if (scheme !== "http" && scheme !== "https") throw badRequest("The scheme must be http or https.");
@@ -401,9 +444,9 @@ export function registerAdminRoutes(api: Router): void {
     recordAudit({
       actorId: ctx.user!.id, actorName: ctx.user!.username, action: "node.updated", ip: ctx.clientIp,
       targetType: "node", targetId: node.id,
-      metadata: body.fqdn !== undefined || body.port !== undefined ? { address: `${scheme}://${fqdn}:${port}` } : undefined,
+      metadata: parsedDomain || body.fqdn !== undefined || body.port !== undefined ? { address: `${scheme}://${fqdn}:${port}` } : undefined,
     });
-    return json({ ok: true });
+    return json({ ok: true, address: { scheme, fqdn, port }, note: parsedDomain?.note ?? null });
   });
 
   api.delete("/api/nodes/:id", async (ctx) => {
